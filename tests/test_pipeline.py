@@ -5,8 +5,7 @@ Quick smoke-test that validates the preprocessing pipeline works
 end-to-end without needing real documents.
 
 Run from the project root:
-    cd rag_preprocessing
-    python test_pipeline.py
+    python tests/test_pipeline.py
 """
 
 import logging
@@ -20,8 +19,8 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-# Make sure local package is importable
-sys.path.insert(0, str(Path(__file__).parent))
+# Make sure project root is importable
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from preprocessing.cleaners.text_cleaner import TextCleaner
 from preprocessing.loaders.html_loader import HTMLLoader
@@ -164,7 +163,6 @@ def test_pipeline_pdf():
 # -----------------------------------------------------------------------
 def test_serialisation():
     print("\n--- Test 6: Save/Load round-trip ---")
-    from preprocessing.models.document import CleanDocument
     cleaner = TextCleaner()
     raw = RawDocument(
         source_path="/tmp/test.pdf",

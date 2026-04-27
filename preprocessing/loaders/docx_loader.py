@@ -22,7 +22,6 @@ from pathlib import Path
 
 import docx
 from docx import Document
-from docx.oxml.ns import qn
 
 from preprocessing.loaders.base_loader import BaseLoader
 from preprocessing.models.document import RawDocument
@@ -30,6 +29,7 @@ from preprocessing.models.document import RawDocument
 logger = logging.getLogger(__name__)
 
 _HEADING_STYLES = {"Heading 1", "Heading 2", "heading 1", "heading 2"}
+_MIN_SECTION_WORDS = 12
 
 
 class DOCXLoader(BaseLoader):
@@ -44,11 +44,16 @@ class DOCXLoader(BaseLoader):
 
         core_meta = self._extract_core_properties(doc)
         sections = self._split_into_sections(doc)
+        sections = self._merge_short_sections(sections, min_words=_MIN_SECTION_WORDS)
         docs: list[RawDocument] = []
 
         for idx, (heading, paragraphs) in enumerate(sections):
             text = self._section_to_text(heading, paragraphs)
-            meta = {**core_meta, "section_heading": heading or ""}
+            meta = {
+                **core_meta,
+                "section_heading": heading or "",
+                "total_sections": len(sections),
+            }
             docs.append(self._make_doc(text, page_num=idx, extra_meta=meta))
 
         logger.info(
@@ -93,6 +98,47 @@ class DOCXLoader(BaseLoader):
             sections = [("", all_blocks)]
 
         return sections
+
+    @staticmethod
+    def _merge_short_sections(
+        sections: list[tuple[str, list]],
+        min_words: int = 12,
+    ) -> list[tuple[str, list]]:
+        """
+        Merge tiny heading-only sections with the next or previous section.
+        This reduces low-context fragments such as title-only blocks.
+        """
+        if not sections:
+            return sections
+
+        merged: list[tuple[str, list]] = []
+        i = 0
+        while i < len(sections):
+            heading, blocks = sections[i]
+            text = DOCXLoader._section_to_text(heading, blocks)
+            word_count = len(text.split())
+
+            if word_count >= min_words or len(sections) == 1:
+                merged.append((heading, blocks))
+                i += 1
+                continue
+
+            if i + 1 < len(sections):
+                next_heading, next_blocks = sections[i + 1]
+                combined_heading = heading or next_heading
+                combined_blocks = blocks + next_blocks
+                sections[i + 1] = (combined_heading, combined_blocks)
+                i += 1
+                continue
+
+            if merged:
+                prev_heading, prev_blocks = merged.pop()
+                merged.append((prev_heading or heading, prev_blocks + blocks))
+            else:
+                merged.append((heading, blocks))
+            i += 1
+
+        return merged
 
     @staticmethod
     def _iter_blocks(doc: Document):

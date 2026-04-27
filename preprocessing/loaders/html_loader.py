@@ -23,8 +23,19 @@ import logging
 import re
 from pathlib import Path
 
-import chardet
-from bs4 import BeautifulSoup, Comment, Tag
+from lxml import html as lxml_html
+
+try:
+    from bs4 import BeautifulSoup, Comment, Tag
+except ImportError:  # pragma: no cover
+    BeautifulSoup = None
+    Comment = None
+    Tag = object
+
+try:
+    import chardet
+except ImportError:  # pragma: no cover
+    chardet = None
 
 from preprocessing.loaders.base_loader import BaseLoader
 from preprocessing.models.document import RawDocument
@@ -69,13 +80,15 @@ class HTMLLoader(BaseLoader):
         encoding = self._detect_encoding(html_bytes)
         html_str = html_bytes.decode(encoding, errors="replace")
 
-        soup = BeautifulSoup(html_str, "lxml")
-        self._strip_noise(soup)
-
-        meta = self._extract_html_metadata(soup)
+        if BeautifulSoup is not None:
+            soup = BeautifulSoup(html_str, "lxml")
+            self._strip_noise(soup)
+            meta = self._extract_html_metadata(soup)
+            sections = self._extract_sections(soup)
+        else:
+            meta = self._extract_html_metadata_fallback(html_str)
+            sections = self._extract_sections_fallback(html_str)
         meta["html_encoding"] = encoding
-
-        sections = self._extract_sections(soup)
         docs: list[RawDocument] = []
 
         for idx, (title, text) in enumerate(sections):
@@ -102,12 +115,16 @@ class HTMLLoader(BaseLoader):
         if match:
             return match.group(1).lower()
         # Byte-level heuristic
-        detected = chardet.detect(raw)
-        return detected.get("encoding") or "utf-8"
+        if chardet is not None:
+            detected = chardet.detect(raw)
+            return detected.get("encoding") or "utf-8"
+        return "utf-8"
 
     @staticmethod
     def _strip_noise(soup: BeautifulSoup) -> None:
         """Remove comments and known-noisy tags in place."""
+        if Comment is None:
+            return
         for comment in soup.find_all(string=lambda t: isinstance(t, Comment)):
             comment.extract()
         for tag_name in _NOISE_TAGS:
@@ -190,3 +207,30 @@ class HTMLLoader(BaseLoader):
             if name in ("author", "description", "keywords", "og:title", "og:description"):
                 meta[f"meta_{name.replace(':', '_')}"] = content
         return meta
+
+    @staticmethod
+    def _extract_html_metadata_fallback(html_str: str) -> dict:
+        meta: dict = {}
+        try:
+            tree = lxml_html.fromstring(html_str)
+            titles = tree.xpath("//title/text()")
+            meta["html_title"] = titles[0].strip() if titles else ""
+        except Exception:
+            meta["html_title"] = ""
+        return meta
+
+    @staticmethod
+    def _extract_sections_fallback(html_str: str) -> list[tuple[str, str]]:
+        try:
+            tree = lxml_html.fromstring(html_str)
+            texts = []
+            for node in tree.xpath("//body//*[self::h1 or self::h2 or self::p or self::li]"):
+                text = " ".join(t.strip() for t in node.itertext() if t.strip())
+                if text:
+                    texts.append(text)
+            if texts:
+                return [("", "\n".join(texts))]
+            body_text = " ".join(t.strip() for t in tree.xpath("//body//text()") if t.strip())
+            return [("", body_text)] if body_text else []
+        except Exception:
+            return [("", html_str.strip())] if html_str.strip() else []
