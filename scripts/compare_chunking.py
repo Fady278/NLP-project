@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import statistics
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from preprocessing.pipeline import PreprocessingPipeline
 TARGET_MIN_TOKENS = 80
 TARGET_MAX_TOKENS = 250
 HARD_MAX_TOKENS = 512
+QUERY_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -27,6 +29,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Comma-separated file extensions to process.",
     )
     parser.add_argument("--min-words", type=int, default=5)
+    parser.add_argument(
+        "--query-file",
+        default="",
+        help="Optional text file with one evaluation query per line for a lightweight retrieval comparison.",
+    )
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -88,6 +95,48 @@ def summarize_dataset(clean_docs: list) -> dict:
     }
 
 
+def _query_terms(query: str) -> set[str]:
+    return {term.lower() for term in QUERY_TOKEN_RE.findall(query) if len(term) > 2}
+
+
+def run_retrieval_probe(chunks: list, query_file: str) -> dict | None:
+    query_path = Path(query_file)
+    if not query_file or not query_path.exists():
+        return None
+
+    queries = [line.strip() for line in query_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not queries:
+        return None
+
+    hit_count = 0
+    score_total = 0.0
+    for query in queries:
+        q_terms = _query_terms(query)
+        if not q_terms:
+            continue
+
+        best_overlap = 0.0
+        for chunk in chunks:
+            c_terms = _query_terms(chunk.text)
+            if not c_terms:
+                continue
+            overlap = len(q_terms & c_terms) / len(q_terms)
+            if overlap > best_overlap:
+                best_overlap = overlap
+        score_total += best_overlap
+        if best_overlap >= 0.5:
+            hit_count += 1
+
+    evaluated = len([q for q in queries if _query_terms(q)])
+    if evaluated == 0:
+        return None
+    return {
+        "query_count": evaluated,
+        "avg_overlap": round(score_total / evaluated, 3),
+        "hit_rate": round((hit_count / evaluated) * 100, 1),
+    }
+
+
 def score_strategy(stats: dict) -> float:
     """
     Size-based score only.
@@ -104,7 +153,7 @@ def score_strategy(stats: dict) -> float:
     return round(score, 2)
 
 
-def generate_insights(results: dict[str, dict], dataset_summary: dict) -> list[str]:
+def generate_insights(results: dict[str, dict], dataset_summary: dict, retrieval_results: dict[str, dict] | None = None) -> list[str]:
     insights = ["## Data-Driven Insights", ""]
 
     if dataset_summary["source_file_count"] < 3:
@@ -167,14 +216,31 @@ def generate_insights(results: dict[str, dict], dataset_summary: dict) -> list[s
                 "- Both strategies are very close by size metrics alone, so the final choice should be based on retrieval experiments in the next phase."
             )
 
+    if retrieval_results:
+        insights.append("")
+        insights.append("## Optional Retrieval Probe")
+        insights.append("")
+        for strategy, probe in retrieval_results.items():
+            insights.append(
+                f"- `{strategy}` on {probe['query_count']} query/queries: hit rate {probe['hit_rate']}%, average lexical overlap {probe['avg_overlap']}."
+            )
+        insights.append(
+            "- This probe is lightweight and lexical only, but it is closer to retrieval behavior than chunk-size statistics alone."
+        )
+
     insights.append("")
-    insights.append(
-        "- Note: this script compares chunk size quality only. Final justification should also include retrieval behavior on real queries."
-    )
+    if retrieval_results:
+        insights.append(
+            "- Note: final justification should still be confirmed with the actual embedding model and vector store used in the full RAG pipeline."
+        )
+    else:
+        insights.append(
+            "- Note: this script compares chunk size quality only unless a query file is supplied. Final justification should also include retrieval behavior on real queries."
+        )
     return insights
 
 
-def render_markdown(results: dict[str, dict], dataset_summary: dict) -> str:
+def render_markdown(results: dict[str, dict], dataset_summary: dict, retrieval_results: dict[str, dict] | None = None) -> str:
     type_summary = ", ".join(
         f"{file_type}:{count}" for file_type, count in sorted(dataset_summary["file_type_counts"].items())
     ) or "none"
@@ -200,7 +266,7 @@ def render_markdown(results: dict[str, dict], dataset_summary: dict) -> str:
         )
 
     lines.append("")
-    lines.extend(generate_insights(results, dataset_summary))
+    lines.extend(generate_insights(results, dataset_summary, retrieval_results))
 
     lines.extend(["", "---", "*Report generated automatically from current dataset statistics.*"])
     return "\n".join(lines)
@@ -228,13 +294,17 @@ def main() -> None:
 
     dataset_summary = summarize_dataset(clean_docs)
     results = {}
+    retrieval_results: dict[str, dict] = {}
     for strategy in ("paragraph", "sentence_window"):
         chunks = chunk_documents(clean_docs, strategy=strategy)
         results[strategy] = summarize(chunks)
+        probe = run_retrieval_probe(chunks, args.query_file)
+        if probe is not None:
+            retrieval_results[strategy] = probe
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output = render_markdown(results, dataset_summary)
+    output = render_markdown(results, dataset_summary, retrieval_results or None)
     (output_dir / "chunking_comparison.md").write_text(output, encoding="utf-8")
     
     print("\n" + output)

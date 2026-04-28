@@ -19,6 +19,7 @@ _LONG_UNIT_SPLIT_PATTERNS = (
     re.compile(r"\s+\|\s+"),
     re.compile(r"(?<=,)\s+(?=[A-Z\u0621-\u064A])"),
 )
+_ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
 
 
 @dataclass
@@ -39,7 +40,23 @@ class Chunk:
 
 
 def approximate_token_count(text: str) -> int:
-    return len(_TOKEN_RE.findall(text))
+    tokens = _TOKEN_RE.findall(text)
+    if not tokens:
+        return 0
+
+    base_count = len(tokens)
+    word_like_count = sum(1 for tok in tokens if any(ch.isalnum() for ch in tok))
+    arabic_char_count = len(_ARABIC_CHAR_RE.findall(text))
+    alpha_count = sum(1 for ch in text if ch.isalpha())
+    arabic_ratio = (arabic_char_count / alpha_count) if alpha_count else 0.0
+
+    if arabic_ratio >= 0.30:
+        return max(base_count, int(round(word_like_count * 1.35)))
+    return base_count
+
+
+def _make_chunk_id(source_doc_id: str, strategy: str, text: str, index: int | str) -> str:
+    return hashlib.sha256(f"{source_doc_id}::{strategy}::{index}::{text}".encode()).hexdigest()[:16]
 
 
 def _split_oversized_unit(text: str, target_tokens: int) -> list[str]:
@@ -90,7 +107,7 @@ def _prepare_sentence_units(text: str, target_tokens: int) -> list[str]:
 
 
 def _make_chunk(clean_doc: CleanDocument, strategy: str, text: str, index: int) -> Chunk:
-    digest = hashlib.sha256(f"{clean_doc.doc_id}::{strategy}::{index}::{text}".encode()).hexdigest()[:16]
+    digest = _make_chunk_id(clean_doc.doc_id, strategy, text, index)
     return Chunk(
         chunk_id=digest,
         source_doc_id=clean_doc.doc_id,
@@ -202,7 +219,7 @@ def _merge_tiny_chunks(chunks: list[Chunk], min_tokens: int = 80) -> list[Chunk]
             neighbor = chunks[i + 1]
             combined_text = f"{current.text}\n{neighbor.text}".strip()
             combined = Chunk(
-                chunk_id=neighbor.chunk_id,
+                chunk_id=_make_chunk_id(current.source_doc_id, current.strategy, combined_text, f"merge_fwd_{i}"),
                 source_doc_id=current.source_doc_id,
                 source_path=current.source_path,
                 file_type=current.file_type,
@@ -223,7 +240,7 @@ def _merge_tiny_chunks(chunks: list[Chunk], min_tokens: int = 80) -> list[Chunk]
             combined_text = f"{previous.text}\n{current.text}".strip()
             merged.append(
                 Chunk(
-                    chunk_id=previous.chunk_id,
+                    chunk_id=_make_chunk_id(previous.source_doc_id, previous.strategy, combined_text, f"merge_back_{i}"),
                     source_doc_id=previous.source_doc_id,
                     source_path=previous.source_path,
                     file_type=previous.file_type,

@@ -81,6 +81,7 @@ _ARABIC_NORM_TABLE = str.maketrans(
 
 # Diacritic (tashkeel) removal pattern — useful for search normalisation
 _ARABIC_DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7\u06E8\u06EA-\u06ED]")
+_MOJIBAKE_HINT_RE = re.compile(r"(?:Ã.|Â.|â..|ðŸ|ï¿½)")
 
 
 class TextCleaner:
@@ -198,7 +199,6 @@ class TextCleaner:
 
         # Count language-discriminating trigrams
         scores: dict[str, int] = {
-            "ar": 0,  # handled above; kept for symmetry
             "en": sample.count("the") + sample.count("and") + sample.count("ing"),
             "fr": sample.count("les") + sample.count("des") + sample.count("est"),
             "de": sample.count("die") + sample.count("der") + sample.count("und"),
@@ -214,10 +214,20 @@ class TextCleaner:
 
         The fix is best-effort; it won't recover all damage.
         """
+        if not text or not _MOJIBAKE_HINT_RE.search(text):
+            return text
+
         try:
             # If the string was decoded as latin-1 from utf-8 bytes, re-encode
             # and decode to restore the original characters.
             repaired = text.encode("latin-1").decode("utf-8")
+            if _MOJIBAKE_HINT_RE.search(repaired):
+                return text
+
+            original_alpha = sum(1 for c in text if c.isalpha())
+            repaired_alpha = sum(1 for c in repaired if c.isalpha())
+            if original_alpha and repaired_alpha < original_alpha * 0.8:
+                return text
             return repaired
         except (UnicodeEncodeError, UnicodeDecodeError):
             return text

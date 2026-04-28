@@ -137,9 +137,9 @@ def test_pipeline_pdf():
     print("\n--- Test 5: Pipeline with real PDF ---")
     import shutil
 
-    pdf_src = Path("/mnt/user-data/uploads/NLP_RAG_Project.pdf")
+    pdf_src = Path(__file__).resolve().parent.parent / "data" / "raw" / "NLP_RAG_Project.pdf"
     if not pdf_src.exists():
-        print("  Skipped (no uploaded PDF in environment)")
+        print("  Skipped (project PDF not found in data/raw)")
         return
 
     with tempfile.TemporaryDirectory() as tmpdir:
