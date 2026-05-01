@@ -41,7 +41,7 @@ class RawDocument:
     doc_id: str = field(init=False)
 
     def __post_init__(self) -> None:
-        seed = f"{self.source_path}::{self.page_num}"
+        seed = f"{self.raw_text}::{self.page_num}"
         self.doc_id = hashlib.sha256(seed.encode()).hexdigest()[:16]
 
     def to_dict(self) -> dict:
