@@ -1,5 +1,6 @@
 import os
 import hashlib
+import uuid
 from pathlib import Path
 
 from qdrant_client import QdrantClient
@@ -9,8 +10,10 @@ from qdrant_client.models import (
     PointStruct,
     Filter,
     FieldCondition,
+    MatchAny,
     MatchValue,
     PayloadSchemaType,
+    PointIdsList,
 )
 
 
@@ -49,6 +52,11 @@ class VectorDBClient:
         else:
             self.client = QdrantClient(host=host, port=port)
 
+        try:
+            self.client.get_collections()
+        except Exception as e:
+            raise ConnectionError(f"Cannot connect to Qdrant: {e}")
+
     def _load_env_file(self):
         current_dir = Path(__file__).resolve().parent
         env_path = None
@@ -79,6 +87,20 @@ class VectorDBClient:
     def create_collection_name(self, project_id):
         return f"collection_{project_id}".strip()
 
+    def collection_has_points(self, collection_name) -> bool:
+        try:
+            info = self.client.get_collection(collection_name)
+        except Exception:
+            return False
+        return bool(getattr(info, "points_count", 0))
+
+    def collection_exists(self, collection_name) -> bool:
+        try:
+            self.client.get_collection(collection_name)
+            return True
+        except Exception:
+            return False
+
     def _normalize_point_id(self, point_id):
         if isinstance(point_id, int):
             return point_id
@@ -87,7 +109,8 @@ class VectorDBClient:
         if point_id.isdigit():
             return int(point_id)
 
-        return int(hashlib.sha256(point_id.encode()).hexdigest()[:16], 16)
+        digest = hashlib.sha256(point_id.encode("utf-8")).hexdigest()
+        return str(uuid.UUID(digest[:32]))
 
     # -------------------------
     # CREATE COLLECTION
@@ -113,6 +136,9 @@ class VectorDBClient:
             "metadata.file_type",
             "metadata.strategy",
             "metadata.source_doc_id",
+            "metadata.file_hash",
+            "metadata.chunk_content_hash",
+            "metadata.document_group_id",
         )
 
         for field_name in payload_indexes:
@@ -128,7 +154,7 @@ class VectorDBClient:
     # -------------------------
     def add_documents(self, collection_name, texts, vectors, metadata, point_ids=None):
         if point_ids is None:
-            point_ids = [meta.get("chunk_id") or meta.get("doc_id") for meta in metadata]
+            point_ids = [meta.get("chunk_id") for meta in metadata]
 
         batch_size = 128
 
@@ -175,10 +201,19 @@ class VectorDBClient:
 
         conditions = []
         for key, value in metadata_filter.items():
+            if isinstance(value, (list, tuple, set)):
+                values = [item for item in value if item not in (None, "")]
+                if not values:
+                    continue
+                match = MatchValue(value=values[0]) if len(values) == 1 else MatchAny(any=values)
+            else:
+                if value in (None, ""):
+                    continue
+                match = MatchValue(value=value)
             conditions.append(
                 FieldCondition(
                     key=f"metadata.{key}",
-                    match=MatchValue(value=value)
+                    match=match
                 )
             )
 
@@ -210,3 +245,67 @@ class VectorDBClient:
         existing = [c.name for c in collections]
         if name in existing:
             self.client.delete_collection(collection_name=name)
+
+    def get_existing_ids(self, collection_name) -> set:
+        try:
+            result = self.client.scroll(
+                collection_name=collection_name,
+                limit=10000,
+                with_vectors=False
+            )
+            existing_ids = set()
+            for point in result[0]:
+                existing_ids.add(point.id)
+            return existing_ids
+        except Exception:
+            return set()
+
+    def get_points_by_ids(self, collection_name, point_ids) -> dict:
+        if not point_ids:
+            return {}
+
+        try:
+            normalized_ids = [self._normalize_point_id(point_id) for point_id in point_ids]
+            points = self.client.retrieve(
+                collection_name=collection_name,
+                ids=normalized_ids,
+                with_payload=True,
+                with_vectors=False,
+            )
+            return {point.id: point.payload for point in points}
+        except Exception:
+            return {}
+
+    def list_point_ids(self, collection_name, metadata_filter=None) -> set:
+        point_ids = set()
+        next_offset = None
+        query_filter = self._build_filter(metadata_filter)
+
+        while True:
+            points, next_offset = self.client.scroll(
+                collection_name=collection_name,
+                scroll_filter=query_filter,
+                with_payload=False,
+                with_vectors=False,
+                limit=256,
+                offset=next_offset,
+            )
+            for point in points:
+                point_ids.add(point.id)
+            if next_offset is None:
+                break
+
+        return point_ids
+
+    def delete_points(self, collection_name, point_ids) -> int:
+        normalized_ids = [self._normalize_point_id(point_id) for point_id in point_ids]
+        normalized_ids = list(dict.fromkeys(normalized_ids))
+        if not normalized_ids:
+            return 0
+
+        self.client.delete(
+            collection_name=collection_name,
+            points_selector=PointIdsList(points=normalized_ids),
+            wait=True,
+        )
+        return len(normalized_ids)

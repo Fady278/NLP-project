@@ -19,6 +19,7 @@ Design decisions
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -52,6 +53,7 @@ _NOISE_TAGS = {
 # Block-level section boundaries — we split the document here.
 _SECTION_TAGS = {"article", "section", "main"}
 _HEADING_TAGS = {"h1", "h2"}
+_CONTENT_TAGS = {"p", "li", "td", "th"}
 
 
 class HTMLLoader(BaseLoader):
@@ -69,6 +71,7 @@ class HTMLLoader(BaseLoader):
         obj = cls.__new__(cls)
         obj.path = Path(virtual_path)
         obj._raw_bytes = html.encode("utf-8")
+        obj._file_hash = hashlib.sha256(obj._raw_bytes).hexdigest()
         return obj
 
     # ------------------------------------------------------------------
@@ -159,18 +162,18 @@ class HTMLLoader(BaseLoader):
         current_title = ""
         current_parts: list[str] = []
 
-        for tag in soup.find_all(True):
+        body = soup.find("body") or soup
+        for tag in body.find_all(list(_HEADING_TAGS | _CONTENT_TAGS)):
             if tag.name in _HEADING_TAGS:
                 heading_text = tag.get_text(" ", strip=True)
                 if heading_text:
-                    if current_parts:
+                    if current_parts or current_title:
                         sections.append((current_title, current_parts))
                     current_title = heading_text
                     current_parts = []
-            elif tag.parent and tag.parent.name not in _HEADING_TAGS:
-                # Avoid double-counting nested tags
-                continue
             else:
+                if any(p.name in _CONTENT_TAGS for p in tag.parents):
+                    continue
                 text = tag.get_text(" ", strip=True)
                 if text:
                     current_parts.append(text)

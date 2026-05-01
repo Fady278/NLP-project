@@ -48,7 +48,7 @@ class PDFLoader(BaseLoader):
             reader = PdfReader(str(self.path))
         except PdfReadError as exc:
             logger.error("Cannot open PDF '%s': %s", self.path.name, exc)
-            return []
+            raise IOError(f"Cannot open PDF '{self.path.name}': {exc}")
 
         pdf_meta = self._extract_pdf_metadata(reader)
         docs: list[RawDocument] = []

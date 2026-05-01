@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,6 @@ from typing import Any
 from preprocessing.models.document import CleanDocument
 
 
-_SENTENCE_SPLIT_RE = re.compile(r"(?:\n+|(?<=[\.\!\?\u061F])\s+)")
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 _MIN_CHUNK_TOKENS = 80
 _LONG_UNIT_SPLIT_PATTERNS = (
@@ -20,6 +20,7 @@ _LONG_UNIT_SPLIT_PATTERNS = (
     re.compile(r"(?<=,)\s+(?=[A-Z\u0621-\u064A])"),
 )
 _ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
+_SENTENCE_END_CHARS = ".!?\u061F"
 
 
 @dataclass
@@ -54,9 +55,18 @@ def approximate_token_count(text: str) -> int:
         return max(base_count, int(round(word_like_count * 1.35)))
     return base_count
 
+_CHUNK_VERSION = "v1"
 
-def _make_chunk_id(source_doc_id: str, strategy: str, text: str, index: int | str) -> str:
-    return hashlib.sha256(f"{source_doc_id}::{strategy}::{index}::{text}".encode()).hexdigest()[:16]
+def _make_chunk_id(source_doc_id: str, strategy: str, index: int | str) -> str:
+    return hashlib.sha256(f"{source_doc_id}::{_CHUNK_VERSION}::{strategy}::{index}".encode("utf-8")).hexdigest()
+
+
+def normalized_chunk_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def chunk_content_hash(text: str) -> str:
+    return hashlib.sha256(normalized_chunk_text(text).encode("utf-8")).hexdigest()
 
 
 def _split_oversized_unit(text: str, target_tokens: int) -> list[str]:
@@ -96,7 +106,7 @@ def _split_oversized_unit(text: str, target_tokens: int) -> list[str]:
 
 
 def _prepare_sentence_units(text: str, target_tokens: int) -> list[str]:
-    base_units = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+    base_units = _split_sentence_units(text)
     if not base_units:
         base_units = [text.strip()] if text.strip() else []
 
@@ -106,8 +116,94 @@ def _prepare_sentence_units(text: str, target_tokens: int) -> list[str]:
     return prepared
 
 
+def _split_sentence_units(text: str) -> list[str]:
+    text = text.strip()
+    if not text:
+        return []
+
+    units: list[str] = []
+    start = 0
+    i = 0
+    text_len = len(text)
+
+    while i < text_len:
+        ch = text[i]
+
+        if ch == "\n":
+            j = i
+            while j < text_len and text[j] == "\n":
+                j += 1
+            if j - i >= 1:
+                unit = text[start:i].strip()
+                if unit:
+                    units.append(unit)
+                start = j
+            i = j
+            continue
+
+        if ch in _SENTENCE_END_CHARS and _is_sentence_boundary(text, i):
+            end = i + 1
+            while end < text_len and text[end] in "\"')]}":
+                end += 1
+            unit = text[start:end].strip()
+            if unit:
+                units.append(unit)
+            while end < text_len and text[end].isspace():
+                end += 1
+            start = end
+            i = end
+            continue
+
+        i += 1
+
+    tail = text[start:].strip()
+    if tail:
+        units.append(tail)
+    return units
+
+
+def _is_sentence_boundary(text: str, idx: int) -> bool:
+    ch = text[idx]
+    if ch != ".":
+        return True
+
+    prev_char = text[idx - 1] if idx > 0 else ""
+    next_idx = idx + 1
+    next_char = text[next_idx] if next_idx < len(text) else ""
+
+    # Avoid splitting decimal numbers like 3.14
+    if prev_char.isdigit() and next_char.isdigit():
+        return False
+
+    probe = idx + 1
+    while probe < len(text) and text[probe].isspace():
+        probe += 1
+    next_non_space = text[probe] if probe < len(text) else ""
+
+    token_start = idx
+    while token_start > 0 and not text[token_start - 1].isspace():
+        token_start -= 1
+    token = text[token_start : idx + 1].strip("\"')]}")
+    alpha_chars = [c for c in token if c.isalpha()]
+
+    # Avoid splitting dotted initialisms like U.S. / A.B. / e.g.
+    if token.count(".") > 1 and next_non_space.isalpha():
+        return False
+
+    # Avoid splitting after short capitalized titles like Dr. / Mr. / Prof.
+    if (
+        token.count(".") == 1
+        and 1 <= len(alpha_chars) <= 4
+        and any(c.isupper() for c in alpha_chars)
+        and next_non_space.isalpha()
+    ):
+        return False
+
+    return True
+
+
 def _make_chunk(clean_doc: CleanDocument, strategy: str, text: str, index: int) -> Chunk:
-    digest = _make_chunk_id(clean_doc.doc_id, strategy, text, index)
+    digest = _make_chunk_id(clean_doc.doc_id, strategy, index)
     return Chunk(
         chunk_id=digest,
         source_doc_id=clean_doc.doc_id,
@@ -119,9 +215,12 @@ def _make_chunk(clean_doc: CleanDocument, strategy: str, text: str, index: int) 
         token_count=approximate_token_count(text),
         char_count=len(text),
         metadata={
-            **clean_doc.metadata,
             "lang": clean_doc.detected_lang,
             "is_arabic": clean_doc.is_arabic,
+            "chunk_index": index,
+            "content_hash": clean_doc.metadata.get("content_hash"),
+            "chunk_content_hash": chunk_content_hash(text),
+            "file_hash": clean_doc.metadata.get("file_hash"),
         },
     )
 
@@ -147,6 +246,8 @@ def chunk_by_paragraph(clean_doc: CleanDocument, target_tokens: int = 260, overl
         text = "\n\n".join(buffer).strip()
         if text:
             chunks.append(_make_chunk(clean_doc, "paragraph", text, len(chunks)))
+    if overlap:
+        return chunks
     return _merge_tiny_chunks(chunks, min_tokens=_MIN_CHUNK_TOKENS)
 
 
@@ -182,6 +283,8 @@ def chunk_by_sentence_window(
         cursor = max(cursor + 1, next_cursor - overlap_sentences)
         if cursor == next_cursor:
             cursor += 1
+    if overlap_sentences:
+        return chunks
     return _merge_tiny_chunks(chunks, min_tokens=_MIN_CHUNK_TOKENS)
 
 
@@ -219,7 +322,7 @@ def _merge_tiny_chunks(chunks: list[Chunk], min_tokens: int = 80) -> list[Chunk]
             neighbor = chunks[i + 1]
             combined_text = f"{current.text}\n{neighbor.text}".strip()
             combined = Chunk(
-                chunk_id=_make_chunk_id(current.source_doc_id, current.strategy, combined_text, f"merge_fwd_{i}"),
+                chunk_id=_make_chunk_id(current.source_doc_id, current.strategy, f"merge_fwd_{i}"),
                 source_doc_id=current.source_doc_id,
                 source_path=current.source_path,
                 file_type=current.file_type,
@@ -240,7 +343,7 @@ def _merge_tiny_chunks(chunks: list[Chunk], min_tokens: int = 80) -> list[Chunk]
             combined_text = f"{previous.text}\n{current.text}".strip()
             merged.append(
                 Chunk(
-                    chunk_id=_make_chunk_id(previous.source_doc_id, previous.strategy, combined_text, f"merge_back_{i}"),
+                    chunk_id=_make_chunk_id(previous.source_doc_id, previous.strategy, f"merge_back_{i}"),
                     source_doc_id=previous.source_doc_id,
                     source_path=previous.source_path,
                     file_type=previous.file_type,
@@ -262,6 +365,14 @@ def _merge_tiny_chunks(chunks: list[Chunk], min_tokens: int = 80) -> list[Chunk]
 def save_chunks(chunks: list[Chunk], output_path: str | Path) -> None:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as fh:
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        delete=False,
+        dir=output_path.parent,
+        suffix=output_path.suffix or ".jsonl",
+    ) as fh:
         for chunk in chunks:
             fh.write(json.dumps(chunk.to_dict(), ensure_ascii=False) + "\n")
+        temp_path = Path(fh.name)
+    os.replace(temp_path, output_path)

@@ -3,7 +3,9 @@ from sentence_transformers import SentenceTransformer
 class EmbeddingModel:
     def __init__(self):
         # multilingual model (Arabic + English)
-        self.model = SentenceTransformer("intfloat/multilingual-e5-base")
+        self.model_name = "intfloat/multilingual-e5-base"
+        self.model = SentenceTransformer(self.model_name)
+        self.normalization_version = "e5-prefix-v1"
 
     def embed(self, text: str, doc_type: str = "passage") -> list[float]:
         # E5 models require prefix!
@@ -28,8 +30,8 @@ class EmbeddingModel:
 
     @property
     def embedding_size(self) -> int:
-        if hasattr(self.model, "get_embedding_dimension"):
-            return self.model.get_embedding_dimension()
-        return self.model.get_sentence_embedding_dimension()
-    
-    
+        return self.model.get_embedding_dimension()
+
+    @property
+    def cache_namespace(self) -> str:
+        return f"{self.model_name}|{self.normalization_version}|normalize_embeddings=True"

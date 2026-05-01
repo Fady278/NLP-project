@@ -40,7 +40,7 @@ class DOCXLoader(BaseLoader):
             doc: Document = docx.Document(str(self.path))
         except Exception as exc:  # noqa: BLE001
             logger.error("Cannot open DOCX '%s': %s", self.path.name, exc)
-            return []
+            raise IOError(f"Cannot open DOCX '{self.path.name}': {exc}")
 
         core_meta = self._extract_core_properties(doc)
         sections = self._split_into_sections(doc)
