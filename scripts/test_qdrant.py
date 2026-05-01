@@ -29,7 +29,7 @@ else:
     print(f"Vector size mismatch: expected {expected_size}, got {actual_size}")
 
 # ── 3. Test semantic search ─────────────────────────────────
-query = "What's the RAG?"  # ← replace with something from your docs
+query = "enter your query hena"  # ← replace with something from your docs
 query_vector = embedding_model.embed(query, doc_type="query")
 
 results = vectordb.search(collection_name, query_vector, top_k=3)
@@ -38,8 +38,7 @@ if results:
     print(f"\n Search working! Top {len(results)} results for: '{query}'")
     print("=" * 60)
     for i, r in enumerate(results, 1):
-        print(f"\n🔹 Result {i} | Score: {r['score']:.4f} | Page: {r['metadata'].get('page_label', 'N/A')}")
-        print(f"Author : {r['metadata'].get('pdf_author', 'N/A')}")
+        print(f"\n Result {i} | Score: {r['score']:.4f} | Page: {r['metadata'].get('page_label', 'N/A')}")
         print(f"Text   : {r['text'][:300]}...")
         print("-" * 60)
 else:
