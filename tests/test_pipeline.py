@@ -43,7 +43,6 @@ def test_document_model():
     print(f"  doc_id  : {raw.doc_id}")
     print(f"  raw_text: {raw.raw_text[:60]}")
     assert raw.doc_id, "doc_id must not be empty"
-    print("  PASSED ✓")
 
 
 # -----------------------------------------------------------------------
@@ -65,7 +64,6 @@ def test_cleaner_english():
     assert clean.detected_lang == "en"
     assert "\x00" not in clean.clean_text
     assert "  " not in clean.clean_text  # no double spaces
-    print("  PASSED ✓")
 
 
 # -----------------------------------------------------------------------
@@ -94,7 +92,6 @@ def test_cleaner_arabic():
     print(f"  text[:80] : {clean.clean_text[:80]}")
     assert clean.is_arabic, "Arabic text should be detected as Arabic"
     assert clean.detected_lang == "ar"
-    print("  PASSED ✓")
 
 
 # -----------------------------------------------------------------------
@@ -119,43 +116,29 @@ def test_html_loader():
     loader = HTMLLoader.from_string(html, virtual_path="job_posting.html")
     raw_docs = loader.load()
     print(f"  sections loaded: {len(raw_docs)}")
-    for d in raw_docs:
-        print(f"    page {d.page_num} | chars {len(d.raw_text)} | meta: {d.metadata.get('section_title','')}")
 
     cleaner = TextCleaner()
     clean_docs = [cleaner.clean(r) for r in raw_docs]
     non_empty = [d for d in clean_docs if not d.is_empty()]
     print(f"  non-empty after cleaning: {len(non_empty)}")
     assert len(non_empty) >= 1
-    print("  PASSED ✓")
 
 
 # -----------------------------------------------------------------------
 # Test 5 — Full pipeline with temp PDF
 # -----------------------------------------------------------------------
 def test_pipeline_pdf():
-    print("\n--- Test 5: Pipeline with real PDF ---")
-    import shutil
-
+    import pytest
     pdf_src = Path(__file__).resolve().parent.parent / "data" / "raw" / "NLP_RAG_Project.pdf"
     if not pdf_src.exists():
-        print("  Skipped (project PDF not found in data/raw)")
-        return
+        pytest.skip("Skipped (project PDF not found in data/raw)")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         shutil.copy(pdf_src, Path(tmpdir) / "NLP_RAG_Project.pdf")
         pipeline = PreprocessingPipeline(output_dir=Path(tmpdir) / "out", min_words=3)
         docs = pipeline.run_directory(tmpdir, extensions=["pdf"])
 
-    print(f"  clean documents: {len(docs)}")
-    for d in docs:
-        print(
-            f"    page {d.page_num:02d} | {d.word_count:4d} words "
-            f"| lang={d.detected_lang} | arabic={d.is_arabic} "
-            f"| {d.clean_text[:60]!r}…"
-        )
     assert len(docs) > 0, "Expected at least one document"
-    print("  PASSED ✓")
 
 
 # -----------------------------------------------------------------------
@@ -181,30 +164,3 @@ def test_serialisation():
     assert loaded[0].doc_id == clean.doc_id
     assert loaded[0].clean_text == clean.clean_text
     print(f"  Round-trip OK — doc_id: {loaded[0].doc_id}")
-    print("  PASSED ✓")
-
-
-# -----------------------------------------------------------------------
-# Run all tests
-# -----------------------------------------------------------------------
-if __name__ == "__main__":
-    tests = [
-        test_document_model,
-        test_cleaner_english,
-        test_cleaner_arabic,
-        test_html_loader,
-        test_pipeline_pdf,
-        test_serialisation,
-    ]
-    failures = 0
-    for test in tests:
-        try:
-            test()
-        except Exception as exc:
-            print(f"  FAILED ✗ — {exc}")
-            failures += 1
-
-    print(f"\n{'='*40}")
-    print(f"  {len(tests) - failures}/{len(tests)} tests passed.")
-    print(f"{'='*40}\n")
-    sys.exit(failures)

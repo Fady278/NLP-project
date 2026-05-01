@@ -16,8 +16,12 @@ from preprocessing.chunking import chunk_documents, save_chunks
 from preprocessing.cleaners.text_cleaner import TextCleaner
 from preprocessing.loaders.registry import get_loader, supported_extensions
 from preprocessing.models.document import CleanDocument, save_documents
-from retrieval.services.indexing_service import IndexingService
-from retrieval.models.vectorDB_client import VectorDBClient
+from dataclasses import dataclass
+
+@dataclass
+class DummyProject:
+    id: str
+
 
 
 logger = logging.getLogger(__name__)
@@ -29,12 +33,14 @@ class PreprocessingPipeline:
         output_dir: str | Path = "data/processed",
         min_words: int = 5,
         chunk_strategy: str = "sentence_window",
+        index_to_vectordb: bool = False,
         **cleaner_kwargs,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.min_words = min_words
         self.chunk_strategy = chunk_strategy
+        self.index_to_vectordb = index_to_vectordb
         self.cleaner = TextCleaner(**cleaner_kwargs)
 
     def run(self, file_paths: list[str | Path]) -> list[CleanDocument]:
@@ -74,15 +80,21 @@ class PreprocessingPipeline:
         chunk_path = self.output_dir / f"chunks_{self.chunk_strategy}.jsonl"
         save_chunks(chunks, chunk_path)
 
-        ## Embedding starts here 
-        vectordb_client = VectorDBClient()
-        indexing_service = IndexingService(vectordb_client)
+        if self.index_to_vectordb:
+            try:
+                from retrieval.models.vectorDB_client import VectorDBClient
+                from retrieval.services.indexing_service import IndexingService
 
-        
-        indexing_service.push_data_to_index(
-         project=type("Project", (), {"id": "local_test"})(),  # temporary project id
-         chunks=chunks,
-         do_reset=1)
+                vectordb_client = VectorDBClient()
+                indexing_service = IndexingService(vectordb_client)
+                indexing_service.push_data_to_index(
+                    project=DummyProject(id="local_test"),
+                    chunks=chunks,
+                    do_reset=1,
+                )
+                logger.info("Vector DB indexing complete.")
+            except Exception as exc:
+                logger.warning("Skipping vector DB indexing: %s", exc)
 
 
         logger.info(
@@ -160,6 +172,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--keep-diacritics", action="store_true")
     p.add_argument(
+        "--index-to-vectordb",
+        action="store_true",
+        help="Also embed and push generated chunks to the configured vector database.",
+    )
+    p.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -179,6 +196,7 @@ def main() -> None:
         output_dir=args.output_dir,
         min_words=args.min_words,
         chunk_strategy=args.chunk_strategy,
+        index_to_vectordb=args.index_to_vectordb,
         remove_arabic_diacritics=not args.keep_diacritics,
     )
     pipeline.run_directory(

@@ -22,7 +22,7 @@ from preprocessing.loaders.html_loader import HTMLLoader
 LOADER_REGISTRY: dict[str, type[BaseLoader]] = {
     "pdf": PDFLoader,
     "docx": DOCXLoader,
-    "doc": DOCXLoader,   # basic support; full .doc requires LibreOffice conversion
+    "doc": DOCXLoader,
     "html": HTMLLoader,
     "htm": HTMLLoader,
 }
