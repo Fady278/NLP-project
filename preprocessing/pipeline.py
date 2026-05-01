@@ -16,6 +16,9 @@ from preprocessing.chunking import chunk_documents, save_chunks
 from preprocessing.cleaners.text_cleaner import TextCleaner
 from preprocessing.loaders.registry import get_loader, supported_extensions
 from preprocessing.models.document import CleanDocument, save_documents
+from retrieval.services.indexing_service import IndexingService
+from retrieval.models.vectorDB_client import VectorDBClient
+
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +73,17 @@ class PreprocessingPipeline:
         chunks = chunk_documents(all_docs, strategy=self.chunk_strategy)
         chunk_path = self.output_dir / f"chunks_{self.chunk_strategy}.jsonl"
         save_chunks(chunks, chunk_path)
+
+        ## Embedding starts here 
+        vectordb_client = VectorDBClient()
+        indexing_service = IndexingService(vectordb_client)
+
+        
+        indexing_service.push_data_to_index(
+         project=type("Project", (), {"id": "local_test"})(),  # temporary project id
+         chunks=chunks,
+         do_reset=1)
+
 
         logger.info(
             "Pipeline complete — files: %d | raw pages: %d | clean docs: %d | skipped: %d → saved to %s and %s",
