@@ -1,0 +1,14 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="128" height="128" rx="30" fill="#FFF8EF"/>
+  <rect x="10" y="10" width="108" height="108" rx="24" fill="url(#bg)" fill-opacity="0.12"/>
+  <path d="M59.5 31C46.5213 31 36 41.5213 36 54.5C36 67.4787 46.5213 78 59.5 78C65.6681 78 71.2814 75.6231 75.4775 71.7348L89.8718 86.1291C91.8244 88.0817 94.9902 88.0817 96.9428 86.1291C98.8955 84.1764 98.8955 81.0106 96.9428 79.058L82.5485 64.6637C86.4368 60.4676 88.8137 54.8543 88.8137 48.6863C88.8137 35.7076 78.2924 25.1863 65.3137 25.1863" stroke="#0B3A72" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="59.5" cy="54.5" r="15.5" fill="#FFFFFF"/>
+  <path d="M48 46.5C51.3333 42.5 56.3 39.94 61.8636 39.5C67.4273 39.06 72.8788 40.7884 77 44.5" stroke="#EF9A3B" stroke-width="7" stroke-linecap="round"/>
+  <path d="M43 42C45.4 34.8 51.6667 30 59 30H70C76.4 30 82.1667 33.2667 85 38.1667" stroke="#0B3A72" stroke-width="8" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="bg" x1="15" y1="12" x2="104" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D89A3F"/>
+      <stop offset="1" stop-color="#0B8C8C"/>
+    </linearGradient>
+  </defs>
+</svg>
