@@ -181,6 +181,48 @@ class IndexStateStore:
             )
             conn.commit()
 
+    def list_manifest_rows_by_file_hash(self, project_id: str, file_hash: str) -> list[dict[str, Any]]:
+        if not file_hash:
+            return []
+
+        with contextlib.closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT chunk_id, file_hash, source_doc_id, source_path, chunk_content_hash, metadata_json
+                FROM chunk_manifest
+                WHERE project_id = ?
+                  AND file_hash = ?
+                """,
+                [project_id, file_hash],
+            ).fetchall()
+
+        return [
+            {
+                "chunk_id": row["chunk_id"],
+                "file_hash": row["file_hash"],
+                "source_doc_id": row["source_doc_id"],
+                "source_path": row["source_path"],
+                "chunk_content_hash": row["chunk_content_hash"],
+                "metadata": json.loads(row["metadata_json"]),
+            }
+            for row in rows
+        ]
+
+    def delete_manifest_by_file_hash(self, project_id: str, file_hash: str) -> None:
+        if not file_hash:
+            return
+
+        with contextlib.closing(self._connect()) as conn:
+            conn.execute(
+                """
+                DELETE FROM chunk_manifest
+                WHERE project_id = ?
+                  AND file_hash = ?
+                """,
+                [project_id, file_hash],
+            )
+            conn.commit()
+
     def reset_project(self, project_id: str) -> None:
         with contextlib.closing(self._connect()) as conn:
             conn.execute(
