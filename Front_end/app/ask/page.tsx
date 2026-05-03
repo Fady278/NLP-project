@@ -121,14 +121,7 @@ export default function AskPage() {
 
           <ScrollArea className="min-h-0 flex-1">
             <div className="space-y-2 p-3">
-              {!hydrated ? (
-                Array.from({ length: 3 }).map((_, index) => (
-                  <div key={index} className="rounded-2xl border border-border/30 bg-card/20 p-4">
-                    <Skeleton className="h-4 w-3/4" />
-                    <Skeleton className="mt-3 h-3 w-1/2" />
-                  </div>
-                ))
-              ) : sessions.length === 0 ? (
+              {sessions.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-border/50 bg-muted/10 p-4 text-sm text-muted-foreground">
                   Start a new chat to build your first session.
                 </div>

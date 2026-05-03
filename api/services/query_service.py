@@ -64,8 +64,10 @@ class QueryApplicationService:
                 str(exc),
             ) from exc
 
+        latency_ms = (perf_counter() - started_at) * 1000
+
         if not chunks:
-            return QueryResponse(
+            empty_response = QueryResponse(
                 question=query,
                 answer="I don't know",
                 sources=[],
@@ -80,6 +82,19 @@ class QueryApplicationService:
                 timestamp=datetime.utcnow().isoformat(),
                 model_used=self.llm_service.model,
             )
+            self.system_data_service.record_query_activity(
+                question=query,
+                project_id=project_id,
+                top_k=top_k,
+                retrieved_count=0,
+                latency_ms=latency_ms,
+                answer=empty_response.answer,
+                retrieved_context=[],
+                model_used=empty_response.model_used,
+                response_metadata=empty_response.metadata,
+                timestamp=empty_response.timestamp,
+            )
+            return empty_response
 
         try:
             normalized_prompt_version = self.rag_service._normalize_prompt_version(prompt_version)
@@ -99,16 +114,7 @@ class QueryApplicationService:
                 str(exc),
             ) from exc
 
-        latency_ms = (perf_counter() - started_at) * 1000
-        self.system_data_service.record_query_activity(
-            question=query,
-            project_id=project_id,
-            top_k=top_k,
-            retrieved_count=len(chunks),
-            latency_ms=latency_ms,
-        )
-
-        return QueryResponse(
+        response = QueryResponse(
             question=query,
             answer=answer,
             sources=sources,
@@ -125,6 +131,19 @@ class QueryApplicationService:
             timestamp=datetime.utcnow().isoformat(),
             model_used=self.llm_service.model,
         )
+        self.system_data_service.record_query_activity(
+            question=query,
+            project_id=project_id,
+            top_k=top_k,
+            retrieved_count=len(chunks),
+            latency_ms=latency_ms,
+            answer=response.answer,
+            retrieved_context=response.retrieved_context,
+            model_used=response.model_used,
+            response_metadata=response.metadata,
+            timestamp=response.timestamp,
+        )
+        return response
 
     @staticmethod
     def _build_prompt_question(query: str, conversation_context: str | None) -> str:

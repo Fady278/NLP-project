@@ -162,6 +162,11 @@ class SystemDataService:
         top_k: int,
         retrieved_count: int,
         latency_ms: float,
+        answer: str | None = None,
+        retrieved_context: list[dict[str, Any]] | None = None,
+        model_used: str | None = None,
+        response_metadata: dict[str, Any] | None = None,
+        timestamp: str | None = None,
     ) -> None:
         self.state_store.record_activity(
             event_type="query",
@@ -171,7 +176,16 @@ class SystemDataService:
                 "top_k": top_k,
                 "retrieved_count": retrieved_count,
                 "latency_ms": round(latency_ms, 2),
+                "question": question,
+                "answer": answer,
+                "retrieved_context": [
+                    c.model_dump() if hasattr(c, "model_dump") else c
+                    for c in (retrieved_context or [])
+                ],
+                "model_used": model_used,
+                "response_metadata": response_metadata or {},
             },
+            timestamp=timestamp,
         )
 
     def record_ingestion_activity(

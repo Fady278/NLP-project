@@ -14,12 +14,15 @@ import type {
   IngestRequest,
   RetrievalFilter,
   ChatSession,
+  ActivityEvent,
 } from '@/lib/models/types'
 import * as api from '@/lib/api/client'
 import {
   CHAT_SESSIONS_STORAGE_KEY,
   POLLING_INTERVALS,
 } from '@/lib/config/api'
+import { useMockMode } from '@/lib/hooks/use-api-mode'
+import { normalizeChunk } from '@/lib/normalizers'
 
 function formatQueryError(error: unknown): string {
   const message = error instanceof Error ? error.message : 'Query failed'
@@ -58,16 +61,20 @@ export const queryKeys = {
 // -----------------------------------------
 
 export function useStats() {
+  const { mockMode } = useMockMode()
+
   return useQuery({
-    queryKey: queryKeys.stats,
+    queryKey: [...queryKeys.stats, mockMode] as const,
     queryFn: api.getStats,
     refetchInterval: POLLING_INTERVALS.stats,
   })
 }
 
 export function useActivity() {
+  const { mockMode } = useMockMode()
+
   return useQuery({
-    queryKey: queryKeys.activity,
+    queryKey: [...queryKeys.activity, mockMode] as const,
     queryFn: api.getActivity,
     refetchInterval: POLLING_INTERVALS.activity,
   })
@@ -86,11 +93,35 @@ export function useRagQuery() {
   useEffect(() => {
     if (typeof window === 'undefined') return
 
+    const restoreFromActivity = async () => {
+      try {
+        const activity = await api.getActivity()
+        const restoredSessions = buildSessionsFromActivity(activity)
+        if (restoredSessions.length === 0) {
+          setHydrated(true)
+          return
+        }
+
+        setSessions(restoredSessions)
+        setActiveSessionId(restoredSessions[0].id)
+        window.localStorage.setItem(CHAT_SESSIONS_STORAGE_KEY, JSON.stringify(restoredSessions))
+      } catch {
+        // Ignore restore failures and continue with an empty state.
+      }
+      setHydrated(true)
+    }
+
     try {
       const raw = window.localStorage.getItem(CHAT_SESSIONS_STORAGE_KEY)
-      if (!raw) return
+      if (!raw) {
+        void restoreFromActivity()
+        return
+      }
       const parsed = JSON.parse(raw)
-      if (!Array.isArray(parsed)) return
+      if (!Array.isArray(parsed)) {
+        void restoreFromActivity()
+        return
+      }
 
       const restoredSessions: ChatSession[] = parsed.map((item, index) => {
         const record = item as Partial<ChatSession> & { answers?: QueryAnswer[] }
@@ -113,9 +144,13 @@ export function useRagQuery() {
       setSessions(restoredSessions)
       if (restoredSessions.length > 0) {
         setActiveSessionId(restoredSessions[0].id)
+      } else {
+        void restoreFromActivity()
+        return
       }
     } catch {
-      // Ignore corrupted session cache and start fresh.
+      void restoreFromActivity()
+      return
     }
     setHydrated(true)
   }, [])
@@ -324,13 +359,51 @@ export function useRagQuery() {
   }
 }
 
+function buildSessionsFromActivity(activity: ActivityEvent[]): ChatSession[] {
+  const queryEvents = activity.filter((event) => {
+    if (event.type !== 'query') return false
+    const metadata = event.metadata ?? {}
+    return typeof metadata.question === 'string' && typeof metadata.answer === 'string'
+  })
+
+  return queryEvents.map((event, index) => {
+    const metadata = event.metadata ?? {}
+    const timestamp = event.timestamp instanceof Date ? event.timestamp : new Date(event.timestamp)
+    const restoredAnswer: QueryAnswer = {
+      id: `activity-answer-${event.id}`,
+      question: String(metadata.question ?? event.description),
+      answer: String(metadata.answer ?? ''),
+      chunks: Array.isArray(metadata.retrieved_context)
+        ? metadata.retrieved_context.map((chunk, chunkIndex) => normalizeChunk(chunk, chunkIndex))
+        : [],
+      timestamp,
+      modelUsed: typeof metadata.model_used === 'string' ? metadata.model_used : undefined,
+      metadata:
+        metadata.response_metadata && typeof metadata.response_metadata === 'object'
+          ? (metadata.response_metadata as Record<string, unknown>)
+          : undefined,
+      status: 'success',
+    }
+
+    return {
+      id: `activity-session-${event.id}`,
+      title: restoredAnswer.question,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      answers: [restoredAnswer],
+    }
+  }).sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+}
+
 // -----------------------------------------
 // Ingestion Hooks
 // -----------------------------------------
 
 export function useIngestionJobs() {
+  const { mockMode } = useMockMode()
+
   return useQuery({
-    queryKey: queryKeys.ingestionJobs,
+    queryKey: [...queryKeys.ingestionJobs, mockMode] as const,
     queryFn: api.getIngestionJobs,
     refetchInterval: POLLING_INTERVALS.ingestionJob,
   })
@@ -382,8 +455,10 @@ export function useDeleteIngestionJob() {
 // -----------------------------------------
 
 export function useDocuments() {
+  const { mockMode } = useMockMode()
+
   return useQuery({
-    queryKey: queryKeys.documents,
+    queryKey: [...queryKeys.documents, mockMode] as const,
     queryFn: api.getDocuments,
   })
 }
@@ -393,8 +468,10 @@ export function useDocuments() {
 // -----------------------------------------
 
 export function useChunks(filters?: RetrievalFilter) {
+  const { mockMode } = useMockMode()
+
   return useQuery({
-    queryKey: queryKeys.chunks(filters),
+    queryKey: [...queryKeys.chunks(filters), mockMode] as const,
     queryFn: () => api.getChunks(filters),
   })
 }

@@ -120,6 +120,30 @@ async function resolveWithMockMode<T>(
   throw new Error('Not found in mock data and real backend fallback failed')
 }
 
+function mergeStats(realData: SystemStats, mockData: SystemStats): SystemStats {
+  const latestIngestion =
+    realData.lastIngestionAt && mockData.lastIngestionAt
+      ? new Date(
+          Math.max(
+            realData.lastIngestionAt.getTime(),
+            mockData.lastIngestionAt.getTime()
+          )
+        )
+      : realData.lastIngestionAt ?? mockData.lastIngestionAt
+
+  return {
+    totalDocuments: Math.max(realData.totalDocuments, mockData.totalDocuments),
+    totalChunks: Math.max(realData.totalChunks, mockData.totalChunks),
+    retrievalHealth:
+      realData.retrievalHealth === 'offline'
+        ? mockData.retrievalHealth
+        : realData.retrievalHealth,
+    lastIngestionAt: latestIngestion,
+    avgRetrievalLatencyMs:
+      realData.avgRetrievalLatencyMs ?? mockData.avgRetrievalLatencyMs,
+  }
+}
+
 export async function submitQuery(request: QueryRequest): Promise<QueryAnswer> {
   return resolveWithMockMode(
     async () => {
@@ -338,7 +362,8 @@ export async function getStats(): Promise<SystemStats> {
             retrievalHealth: 'offline',
           }
     },
-    () => mockAdapter.mockGetStats()
+    () => mockAdapter.mockGetStats(),
+    mergeStats
   )
 }
 
