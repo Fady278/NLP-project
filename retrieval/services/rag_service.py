@@ -53,7 +53,12 @@ class RAGService:
         for i, chunk in enumerate(chunks):
             text = chunk.get("text", "")
             metadata = chunk.get("metadata", {})
-            source = metadata.get("source_doc_id", "unknown")
+            source_path = metadata.get("source_path", "unknown")
+            page_num = metadata.get("page_num")
+            if page_num is None:
+                source = source_path
+            else:
+                source = f"{source_path} [page {page_num}]"
 
             context_parts.append(
                 f"[{i+1}] {text} (source: {source})"
