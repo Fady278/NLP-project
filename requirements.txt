@@ -1,0 +1,16 @@
+# API
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+
+# Document loaders
+pypdf
+python-docx
+lxml
+beautifulsoup4
+chardet
+
+# Retrieval / embeddings
+qdrant-client
+sentence-transformers
