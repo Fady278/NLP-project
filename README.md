@@ -116,18 +116,19 @@ It covers the full workflow:
 15. [Data Contracts](#data-contracts)
 16. [Screens and UX Walkthrough](#screens-and-ux-walkthrough)
 17. [Run the Project](#run-the-project)
-18. [Environment Variables](#environment-variables)
-19. [Testing and Verification](#testing-and-verification)
-20. [Example API Requests](#example-api-requests)
-21. [Implementation Notes](#implementation-notes)
-22. [Troubleshooting](#troubleshooting)
-23. [Engineering Decisions](#engineering-decisions)
-24. [Known Limitations](#known-limitations)
-25. [Roadmap Ideas](#roadmap-ideas)
-26. [FAQ](#faq)
-27. [Glossary](#glossary)
-28. [Suggested Demo Script](#suggested-demo-script)
-29. [Final Notes](#final-notes)
+18. [Docker Deployment Guide](#docker-deployment-guide)
+19. [Environment Variables](#environment-variables)
+20. [Testing and Verification](#testing-and-verification)
+21. [Example API Requests](#example-api-requests)
+22. [Implementation Notes](#implementation-notes)
+23. [Troubleshooting](#troubleshooting)
+24. [Engineering Decisions](#engineering-decisions)
+25. [Known Limitations](#known-limitations)
+26. [Roadmap Ideas](#roadmap-ideas)
+27. [FAQ](#faq)
+28. [Glossary](#glossary)
+29. [Suggested Demo Script](#suggested-demo-script)
+30. [Final Notes](#final-notes)
 
 ---
 
@@ -875,6 +876,77 @@ http://127.0.0.1:8000/docs
 
 ---
 
+<a id="docker-deployment-guide"></a>
+## Docker Deployment Guide 🐳
+
+This repository now includes a complete containerized setup for the frontend, backend, and a local `Qdrant` instance.
+
+### Files included
+
+- `Dockerfile.backend`
+- `Front_end/Dockerfile`
+- `docker-compose.yml`
+- `.dockerignore`
+- `Front_end/.dockerignore`
+- `requirements-backend.txt`
+
+### Start everything with Docker Compose
+
+From the project root:
+
+```bash
+docker compose up --build
+```
+
+### What this starts
+
+- `frontend` on `http://localhost:3000`
+- `backend` on `http://localhost:8000`
+- `qdrant` on `http://localhost:6333`
+
+### Stop the stack
+
+```bash
+docker compose down
+```
+
+### Reset containers and local Qdrant storage
+
+```bash
+docker compose down -v
+```
+
+### Build individual images manually
+
+Backend:
+
+```bash
+docker build -f Dockerfile.backend -t rag-backend .
+```
+
+Frontend:
+
+```bash
+docker build -t rag-frontend ./Front_end
+```
+
+### Reproducible setup notes
+
+- the backend container reads `.env` from the project root
+- the backend mounts `./data` so processed outputs survive container restarts
+- the backend also mounts `rag-project_api_key.txt` read-only for Qdrant API key compatibility
+- the compose setup uses local `Qdrant` through `QDRANT_HOST=qdrant` and `QDRANT_PORT=6333`
+- the frontend build injects `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` so the browser can reach the API from your machine
+
+### Docker troubleshooting
+
+- If the frontend opens but cannot reach the API, make sure `backend` is healthy and port `8000` is not already in use.
+- If retrieval fails inside containers, confirm that `qdrant` is running and reachable on the compose network.
+- If you changed frontend public env vars, rebuild the frontend image because `NEXT_PUBLIC_*` values are baked into the client build.
+- If you want a clean local vector store, run `docker compose down -v` and bring the stack up again.
+
+---
+
 <a id="environment-variables"></a>
 ## Environment Variables 🔐
 
@@ -885,10 +957,16 @@ The project includes a local `.env` file, and the backend expects secrets and co
 | Variable | Purpose |
 |---|---|
 | `CEREBRAS_API_KEY` | Enables live LLM answering |
+| `CEREBRAS_MODEL` | Selects the live LLM model |
 | `NEXT_PUBLIC_API_BASE_URL` | Frontend target backend URL |
 | `NEXT_PUBLIC_USE_MOCKS` | Controls default mock mode |
 | `NEXT_PUBLIC_PROJECT_ID` | Default project scope used by the frontend |
 | `API_CORS_ORIGINS` | Allowed frontend origins for FastAPI |
+| `QDRANT_HOST` | Docker/local hostname for Qdrant when not using `QDRANT_URL` |
+| `QDRANT_PORT` | Docker/local port for Qdrant when not using `QDRANT_URL` |
+| `QDRANT_URL` | Remote Qdrant URL, typically for cloud setups |
+| `QDRANT_API_KEY` | API key for remote Qdrant |
+| `QDRANT_API_KEY_FILE` | File-based API key path for Qdrant |
 
 ### Notes
 

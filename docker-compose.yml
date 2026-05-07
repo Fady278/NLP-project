@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: rag-backend
+    depends_on:
+      - qdrant
+    env_file:
+      - .env
+    environment:
+      API_CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./rag-project_api_key.txt:/app/rag-project_api_key.txt:ro
+
+  frontend:
+    build:
+      context: ./Front_end
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+        NEXT_PUBLIC_USE_MOCKS: "false"
+        NEXT_PUBLIC_PROJECT_ID: demo-project
+    container_name: rag-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  qdrant_storage:

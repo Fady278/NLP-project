@@ -22,6 +22,8 @@ class VectorDBClient:
         self._load_env_file()
 
         url = os.getenv("QDRANT_URL")
+        host = os.getenv("QDRANT_HOST", host)
+        port = int(os.getenv("QDRANT_PORT", str(port)))
         api_key = os.getenv("QDRANT_API_KEY")
         api_key_file = os.getenv("QDRANT_API_KEY_FILE")
 

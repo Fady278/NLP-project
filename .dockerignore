@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+Front_end/node_modules/
+Front_end/.next/
+Front_end/tsconfig.tsbuildinfo
+data/raw/uploads/
+*.pyc
+*.pyo
+*.pyd
+*.log
