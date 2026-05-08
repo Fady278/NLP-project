@@ -1,31 +1,36 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
 from api.schemas.query import QueryResponse
-from api.services.cerebras_llm import CerebrasLLMService
 from api.services.errors import ApiServiceError, PipelineExecutionError
+from api.services.llm_factory import create_llm_service
+from api.services.query_enhancer import QueryEnhancer
 from api.services.system_service import SystemDataService
 
 if TYPE_CHECKING:
+    from api.services.llm_base import BaseLLMService
     from retrieval.services.rag_service import RAGService
     from retrieval.services.retrieval_service import RetrievalService
 
 
 class QueryApplicationService:
+    _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u0600-\u06FF]+")
+
     def __init__(
         self,
         retrieval_service: RetrievalService | None = None,
         rag_service: RAGService | None = None,
-        llm_service: CerebrasLLMService | None = None,
+        llm_service: BaseLLMService | None = None,
         system_data_service: SystemDataService | None = None,
         processed_dir: str | Path = "data/processed",
     ) -> None:
-        self.llm_service = llm_service or CerebrasLLMService()
+        self.llm_service = llm_service or create_llm_service()
         if retrieval_service is None:
             from retrieval.models.vectorDB_client import VectorDBClient
             from retrieval.services.retrieval_service import RetrievalService
@@ -40,6 +45,7 @@ class QueryApplicationService:
         self.rag_service = rag_service
         self.system_data_service = system_data_service or SystemDataService()
         self.processed_dir = Path(processed_dir)
+        self.query_enhancer = QueryEnhancer(self.llm_service, processed_dir=self.processed_dir)
 
     def execute(
         self,
@@ -52,9 +58,19 @@ class QueryApplicationService:
     ) -> QueryResponse:
         started_at = perf_counter()
         try:
-            chunks = self.retrieval_service.search(
+            initial_chunks = self.retrieval_service.search(
                 project_id=project_id,
                 query=query,
+                top_k=top_k,
+            )
+            query_variants = self.query_enhancer.variants_for_query(
+                query,
+                conversation_context=conversation_context,
+                retrieval_results=initial_chunks,
+            )
+            chunks = self._retrieve_with_variants(
+                project_id=project_id,
+                query_variants=query_variants,
                 top_k=top_k,
             )
             chunks = self._expand_with_adjacent_chunks(chunks)
@@ -77,6 +93,7 @@ class QueryApplicationService:
                     "top_k": top_k,
                     "prompt_version": prompt_version,
                     "retrieved_count": 0,
+                    "query_variants": query_variants,
                     **self.llm_service.metadata(),
                 },
                 timestamp=datetime.utcnow().isoformat(),
@@ -126,6 +143,7 @@ class QueryApplicationService:
                 "retrieved_count": len(chunks),
                 "latency_ms": round(latency_ms, 2),
                 "context_used": bool(conversation_context),
+                "query_variants": query_variants,
                 **self.llm_service.metadata(),
             },
             timestamp=datetime.utcnow().isoformat(),
@@ -144,6 +162,84 @@ class QueryApplicationService:
             timestamp=response.timestamp,
         )
         return response
+
+    def _retrieve_with_variants(
+        self,
+        *,
+        project_id: str,
+        query_variants: list[str],
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        best_by_chunk_id: dict[str, dict[str, Any]] = {}
+        fallback_rows: list[dict[str, Any]] = []
+
+        for variant in query_variants:
+            results = self.retrieval_service.search(
+                project_id=project_id,
+                query=variant,
+                top_k=top_k,
+                dedup=False,
+            )
+            results.extend(self._search_local_chunks(variant, top_k=top_k))
+            for row in results:
+                metadata = row.get("metadata", {}) or {}
+                chunk_id = metadata.get("chunk_id")
+                if isinstance(chunk_id, str) and chunk_id:
+                    existing = best_by_chunk_id.get(chunk_id)
+                    score = row.get("score")
+                    existing_score = existing.get("score") if isinstance(existing, dict) else None
+                    if existing is None or (
+                        isinstance(score, (int, float))
+                        and (not isinstance(existing_score, (int, float)) or score > existing_score)
+                    ):
+                        best_by_chunk_id[chunk_id] = row
+                else:
+                    fallback_rows.append(row)
+
+        merged.extend(best_by_chunk_id.values())
+        merged.extend(fallback_rows)
+        merged.sort(key=lambda item: item.get("score", 0), reverse=True)
+        return self.retrieval_service._post_process(merged, top_k, dedup=True)
+
+    def _search_local_chunks(self, query: str, *, top_k: int) -> list[dict[str, Any]]:
+        tokens = self._tokenize_for_match(query)
+        if not tokens:
+            return []
+
+        rows = self._load_chunk_rows()
+        scored: list[tuple[float, dict[str, Any]]] = []
+        query_text = query.casefold()
+
+        for row in rows:
+            text = str(row.get("text", ""))
+            text_tokens = self._tokenize_for_match(text)
+            if not text_tokens:
+                continue
+
+            overlap = len(tokens.intersection(text_tokens))
+            if overlap == 0:
+                continue
+
+            coverage = overlap / max(1, len(tokens))
+            phrase_bonus = 0.08 if query_text in text.casefold() else 0.0
+            score = min(0.99, 0.84 + (coverage * 0.12) + phrase_bonus)
+            scored.append((score, row))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [
+            self._row_to_chunk(row, base_score=score)
+            for score, row in scored[: max(top_k, 3)]
+        ]
+
+    @classmethod
+    def _tokenize_for_match(cls, text: str) -> set[str]:
+        tokens = {
+            match.group(0).casefold()
+            for match in cls._TOKEN_RE.finditer(text)
+            if len(match.group(0)) > 1
+        }
+        return tokens
 
     @staticmethod
     def _build_prompt_question(query: str, conversation_context: str | None) -> str:

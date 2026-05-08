@@ -6,9 +6,10 @@ from typing import Any
 from urllib import error, request
 
 from api.services.errors import DependencyConfigurationError, ProviderError
+from api.services.llm_base import BaseLLMService
 
 
-class CerebrasLLMService:
+class CerebrasLLMService(BaseLLMService):
     def __init__(
         self,
         *,

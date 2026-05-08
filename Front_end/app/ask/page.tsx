@@ -135,26 +135,27 @@ export default function AskPage() {
                         : 'border-border/30 bg-card/20 hover:border-primary/20 hover:bg-muted/20'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
                       <button
                         type="button"
                         onClick={() => {
                           setActiveSessionId(session.id)
                           setSelectedAnswer(null)
                         }}
-                        className="min-w-0 flex-1 text-left"
+                        className="min-w-0 text-left"
                       >
-                        <p className="line-clamp-2 text-sm font-medium leading-5">{session.title}</p>
+                        <p className="break-words text-sm font-medium leading-5">{session.title}</p>
                         <p className="mt-1 text-xs text-muted-foreground">
                           {session.answers.length} turn{session.answers.length !== 1 ? 's' : ''} · {formatRelativeTime(session.updatedAt)}
                         </p>
                       </button>
                       <button
                         type="button"
-                        className="rounded-lg p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        className="mt-0.5 shrink-0 self-start rounded-lg p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
                         onClick={(event) => {
                           deleteSession(session.id)
                         }}
+                        aria-label={`Delete session ${session.title}`}
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>

@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from api.schemas.common import HealthResponse
-from api.services.cerebras_llm import CerebrasLLMService
 from api.services.errors import DependencyConfigurationError
+from api.services.llm_factory import create_llm_service
 
 router = APIRouter(tags=["health"])
 
@@ -13,12 +13,12 @@ router = APIRouter(tags=["health"])
 def health_check() -> HealthResponse:
     metadata: dict[str, object] = {}
     try:
-        llm = CerebrasLLMService()
+        llm = create_llm_service()
         llm_provider = llm.provider_name
         llm_model = llm.model
     except DependencyConfigurationError as exc:
-        llm_provider = "cerebras"
-        llm_model = "qwen-3-235b-a22b-instruct-2507"
+        llm_provider = "unconfigured"
+        llm_model = "unconfigured"
         metadata["warning"] = exc.message
         metadata["details"] = exc.details
 
