@@ -44,7 +44,7 @@ class RetrievalService:
 
         return self._post_process(results, top_k, dedup=dedup)
 
-    def _post_process(self, results: list, top_k: int, dedup: bool) -> list:
+    def _post_process(self, results: list, top_k: int, dedup: bool, respect_min_score: bool = True) -> list:
         filtered = []
         seen_chunk_ids = set()
         seen_content_hashes = set()
@@ -53,7 +53,7 @@ class RetrievalService:
         for result in results:
             metadata = result.get("metadata", {}) or {}
             score = result.get("score")
-            if isinstance(score, (int, float)) and score < self.min_score:
+            if respect_min_score and isinstance(score, (int, float)) and score < self.min_score:
                 continue
 
             chunk_id = metadata.get("chunk_id")

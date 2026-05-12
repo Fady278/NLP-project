@@ -1,0 +1,32 @@
+[
+  {
+    "id": "edge-1-graduation-gpa",
+    "query": "ما الحد الأدنى للمعدل التراكمي المطلوب للتخرج؟",
+    "expected_source_contains": ["قواعد", "لائحة", "FCIS-ASU"],
+    "expected_chunk_contains": ["2,00"],
+    "expected_answer_keywords": [],
+    "forbidden_source_contains": ["resume", "wikipedia"],
+    "notes": "The correct GPA rule exists in the corpus, but a noisy grading table chunk can outrank it.",
+    "top_k": 1
+  },
+  {
+    "id": "edge-2-maximum-study-period",
+    "query": "ماذا يحدث إذا لم يحقق الطالب شروط التخرج خلال الحد الأقصى للدراسة؟",
+    "expected_source_contains": ["قواعد", "لائحة", "FCIS-ASU"],
+    "expected_chunk_contains": ["يتم فصله"],
+    "expected_answer_keywords": [],
+    "forbidden_source_contains": ["resume", "wikipedia"],
+    "notes": "The relevant dismissal rule is present, but retrieval tends to rank nearby grading-policy chunks first.",
+    "top_k": 1
+  },
+  {
+    "id": "edge-3-attendance-threshold",
+    "query": "ما هي نسبة حضور الطالب المطلوبة لدخول الامتحان؟",
+    "expected_source_contains": ["قواعد", "لائحة", "FCIS-ASU"],
+    "expected_chunk_contains": ["لا يسمح له بدخول الامتحان"],
+    "expected_answer_keywords": [],
+    "forbidden_source_contains": ["resume", "wikipedia"],
+    "notes": "The attendance rule exists, but exam and grading text from adjacent chunks can dominate the ranking.",
+    "top_k": 1
+  }
+]

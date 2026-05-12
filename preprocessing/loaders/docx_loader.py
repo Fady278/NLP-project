@@ -1,20 +1,3 @@
-"""
-DOCX Loader
------------
-Extracts text from Word (.docx) files using python-docx.
-
-Design decisions
-~~~~~~~~~~~~~~~~
-* Treats every top-level section (identified by Heading 1/2 style) as a
-  logical "page", giving natural segment boundaries without arbitrary
-  character splitting.  Falls back to treating the whole document as a
-  single unit when no headings are found.
-* Preserves table cell text — concatenated row-by-row with pipe
-  separators so table structure survives cleaning.
-* Core document properties (author, title, last modified) are captured
-  into metadata.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -38,7 +21,7 @@ class DOCXLoader(BaseLoader):
     def load(self) -> list[RawDocument]:
         try:
             doc: Document = docx.Document(str(self.path))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc: 
             logger.error("Cannot open DOCX '%s': %s", self.path.name, exc)
             raise IOError(f"Cannot open DOCX '{self.path.name}': {exc}")
 
@@ -61,17 +44,11 @@ class DOCXLoader(BaseLoader):
         )
         return docs
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
 
     def _split_into_sections(
         self, doc: Document
     ) -> list[tuple[str, list]]:
-        """
-        Group paragraphs by Heading 1 / Heading 2 boundaries.
-        Returns a list of (heading_text, [paragraph, ...]) tuples.
-        """
+    
         sections: list[tuple[str, list]] = []
         current_heading = ""
         current_paras: list = []
@@ -86,13 +63,12 @@ class DOCXLoader(BaseLoader):
                 else:
                     current_paras.append(block)
             else:
-                # It's a table
+                
                 current_paras.append(block)
 
         if current_paras or current_heading:
             sections.append((current_heading, current_paras))
 
-        # If no headings were found, the whole doc is one section
         if not sections:
             all_blocks = list(self._iter_blocks(doc))
             sections = [("", all_blocks)]
@@ -104,10 +80,7 @@ class DOCXLoader(BaseLoader):
         sections: list[tuple[str, list]],
         min_words: int = 12,
     ) -> list[tuple[str, list]]:
-        """
-        Merge tiny heading-only sections with the next or previous section.
-        This reduces low-context fragments such as title-only blocks.
-        """
+
         if not sections:
             return sections
 
@@ -179,5 +152,5 @@ class DOCXLoader(BaseLoader):
                 "docx_modified": str(cp.modified or ""),
                 "docx_subject": cp.subject or "",
             }
-        except Exception:  # noqa: BLE001
+        except Exception:  
             return {}

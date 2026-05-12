@@ -1,20 +1,3 @@
-"""
-PDF Loader
-----------
-Extracts per-page text from PDF files using pypdf.
-
-Design decisions
-~~~~~~~~~~~~~~~~
-* One RawDocument per page → preserves page-level provenance for
-  citation and retrieval debugging.
-* Extracts PDF metadata (author, title, creation date) into every
-  document's metadata dict so it is available at retrieval time.
-* Warns when a page appears to be a scanned image (text length < threshold)
-  so the operator knows OCR might be needed.
-* Falls back gracefully — a corrupt page logs a warning and is skipped
-  rather than crashing the whole pipeline.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -39,10 +22,7 @@ class PDFLoader(BaseLoader):
         super().__init__(path)
         self.warn_on_scanned = warn_on_scanned
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
+  
     def load(self) -> list[RawDocument]:
         try:
             reader = PdfReader(str(self.path))
@@ -74,8 +54,6 @@ class PDFLoader(BaseLoader):
                         self.path.name,
                         len(text.strip()),
                     )
-                # Still include the page (even if empty) so page numbering
-                # is preserved; the cleaner will mark it as too short later.
 
             page_meta = {
                 **pdf_meta,
@@ -89,13 +67,9 @@ class PDFLoader(BaseLoader):
         )
         return docs
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
+  
+@staticmethod
     def _extract_pdf_metadata(reader: PdfReader) -> dict:
-        """Pull standard PDF Info dict entries into a plain dict."""
         info = reader.metadata or {}
         return {
             "pdf_title": info.get("/Title", ""),
@@ -108,8 +82,7 @@ class PDFLoader(BaseLoader):
 
     @staticmethod
     def _safe_page_label(reader: PdfReader, page_num: int) -> str:
-        """Return a human-readable page label (e.g. 'iv', '12') when available."""
         try:
             return reader.page_labels[page_num]
-        except Exception:  # noqa: BLE001
+        except Exception:  
             return str(page_num + 1)

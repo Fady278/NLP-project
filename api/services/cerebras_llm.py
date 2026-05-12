@@ -20,7 +20,7 @@ class CerebrasLLMService(BaseLLMService):
     ) -> None:
         self.api_key = api_key or os.getenv("CEREBRAS_API_KEY")
         self.base_url = (base_url or os.getenv("CEREBRAS_API_BASE_URL") or "https://api.cerebras.ai/v1").rstrip("/")
-        self.model = model or os.getenv("CEREBRAS_MODEL") or "qwen-3-235b-a22b-instruct-2507"
+        self._model = model or os.getenv("CEREBRAS_MODEL") or "qwen-3-235b-a22b-instruct-2507"
         self.timeout_seconds = float(timeout_seconds or os.getenv("CEREBRAS_TIMEOUT_SECONDS") or "30")
 
         if not self.api_key:
@@ -32,6 +32,10 @@ class CerebrasLLMService(BaseLLMService):
     @property
     def provider_name(self) -> str:
         return "cerebras"
+
+    @property
+    def model(self) -> str:
+        return self._model
 
     def generate(self, prompt: str) -> str:
         payload = {

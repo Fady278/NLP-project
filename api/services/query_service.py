@@ -21,10 +21,14 @@ if TYPE_CHECKING:
 
 class QueryApplicationService:
     _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u0600-\u06FF]+")
+    _LATIN_RE = re.compile(r"[A-Za-z]")
+    _ARABIC_RE = re.compile(r"[\u0600-\u06FF]")
     _SEMANTIC_VARIANT_SCORE_FLOOR = 0.76
     _SEMANTIC_FALLBACK_SCORE_FLOOR = 0.68
     _LEXICAL_SCORE_FLOOR = 0.72
     _LEXICAL_MIN_OVERLAP = 2
+    _MIN_HYBRID_SCORE = 0.66
+    _TOP_SCORE_WINDOW = 0.1
 
     def __init__(
         self,
@@ -178,6 +182,7 @@ class QueryApplicationService:
     ) -> list[dict[str, Any]]:
         if not query_variants:
             return []
+        candidate_k = max(top_k * 3, 5)
 
         merged: list[dict[str, Any]] = []
         best_by_chunk_id: dict[str, dict[str, Any]] = {}
@@ -189,7 +194,7 @@ class QueryApplicationService:
             results = self.retrieval_service.search(
                 project_id=project_id,
                 query=variant,
-                top_k=top_k,
+                top_k=candidate_k,
                 dedup=False,
             )
             top_score = self._top_result_score(results)
@@ -219,7 +224,7 @@ class QueryApplicationService:
 
         if accepted_semantic == 0 or best_semantic_score < self._SEMANTIC_FALLBACK_SCORE_FLOOR:
             for variant in query_variants[:1]:
-                lexical_results = self._search_local_chunks(variant, top_k=top_k)
+                lexical_results = self._search_local_chunks(variant, top_k=candidate_k)
                 for row in lexical_results:
                     metadata = row.get("metadata", {}) or {}
                     chunk_id = metadata.get("chunk_id")
@@ -232,8 +237,9 @@ class QueryApplicationService:
 
         merged.extend(best_by_chunk_id.values())
         merged.extend(fallback_rows)
-        merged.sort(key=lambda item: item.get("score", 0), reverse=True)
-        return self.retrieval_service._post_process(merged, top_k, dedup=True)
+        reranked = self._rerank_candidates(merged, query_variants=query_variants)
+        filtered = self._filter_low_confidence_candidates(reranked, query_variants=query_variants)
+        return self.retrieval_service._post_process(filtered, top_k, dedup=True, respect_min_score=False)
 
     def _search_local_chunks(self, query: str, *, top_k: int) -> list[dict[str, Any]]:
         tokens = self._tokenize_for_match(query)
@@ -279,6 +285,229 @@ class QueryApplicationService:
             if len(match.group(0)) > 1
         }
         return tokens
+
+    def _rerank_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        query_variants: list[str],
+    ) -> list[dict[str, Any]]:
+        token_frequency = self._build_candidate_token_frequency(candidates)
+        reranked: list[dict[str, Any]] = []
+        for row in candidates:
+            features = self._score_candidate(
+                row,
+                query_variants=query_variants,
+                token_frequency=token_frequency,
+            )
+            metadata = dict(row.get("metadata", {}) or {})
+            metadata["semantic_score"] = row.get("score")
+            metadata["hybrid_score"] = features["hybrid_score"]
+            metadata["lexical_coverage"] = features["coverage"]
+            metadata["token_overlap"] = features["overlap_count"]
+            metadata["informative_coverage"] = features["informative_coverage"]
+            metadata["weighted_coverage"] = features["weighted_coverage"]
+            metadata["script_compatible"] = features["script_compatible"]
+
+            reranked.append(
+                {
+                    **row,
+                    "metadata": metadata,
+                    "score": features["hybrid_score"],
+                }
+            )
+
+        reranked.sort(key=lambda item: item.get("score", 0), reverse=True)
+        return reranked
+
+    def _score_candidate(
+        self,
+        row: dict[str, Any],
+        *,
+        query_variants: list[str],
+        token_frequency: dict[str, int],
+    ) -> dict[str, float]:
+        text = str(row.get("text", ""))
+        text_tokens = self._tokenize_for_match(text)
+        semantic_score = float(row.get("score") or 0.0)
+        text_folded = text.casefold()
+        text_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", text))
+        text_tokens_informative = self._informative_tokens(text_tokens)
+
+        best_coverage = 0.0
+        best_overlap = 0
+        best_informative_coverage = 0.0
+        best_weighted_coverage = 0.0
+        best_bigram_matches = 0
+        phrase_match = False
+        numeric_match = False
+        script_compatible = False
+
+        for variant in query_variants:
+            if not self._shares_script(variant, text):
+                continue
+            script_compatible = True
+            variant_tokens = self._tokenize_for_match(variant)
+            if not variant_tokens:
+                continue
+            overlap = len(variant_tokens.intersection(text_tokens))
+            coverage = overlap / max(1, len(variant_tokens))
+            if coverage > best_coverage or (coverage == best_coverage and overlap > best_overlap):
+                best_coverage = coverage
+                best_overlap = overlap
+
+            informative_tokens = self._informative_tokens(variant_tokens)
+            informative_overlap = len(informative_tokens.intersection(text_tokens_informative))
+            informative_coverage = informative_overlap / max(1, len(informative_tokens)) if informative_tokens else 0.0
+            best_informative_coverage = max(best_informative_coverage, informative_coverage)
+            weighted_coverage = self._weighted_overlap_coverage(
+                variant_tokens,
+                text_tokens,
+                token_frequency,
+            )
+            best_weighted_coverage = max(best_weighted_coverage, weighted_coverage)
+            best_bigram_matches = max(best_bigram_matches, self._count_bigram_matches(variant, text_folded))
+
+            folded_variant = variant.casefold()
+            if len(folded_variant) >= 8 and folded_variant in text_folded:
+                phrase_match = True
+
+            query_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", variant))
+            if query_numbers and text_numbers.intersection(query_numbers):
+                numeric_match = True
+
+        if not script_compatible:
+            return {
+                "hybrid_score": semantic_score,
+                "coverage": 0.0,
+                "overlap_count": 0.0,
+                "informative_coverage": 0.0,
+                "weighted_coverage": 0.0,
+                "script_compatible": 0.0,
+            }
+
+        digit_chars = sum(1 for char in text if char.isdigit())
+        digit_ratio = digit_chars / max(1, len(text))
+        table_penalty = 0.04 if digit_ratio > 0.12 and best_overlap < 2 else 0.0
+        phrase_bonus = 0.05 if phrase_match else 0.0
+        bigram_bonus = min(0.08, best_bigram_matches * 0.04)
+        numeric_bonus = 0.04 if numeric_match else 0.0
+        hybrid_score = min(
+            0.99,
+            (semantic_score * 0.78)
+            + (max(best_coverage, best_weighted_coverage) * 0.22)
+            + phrase_bonus
+            + bigram_bonus
+            + numeric_bonus
+            - table_penalty,
+        )
+        return {
+            "hybrid_score": hybrid_score,
+            "coverage": best_coverage,
+            "overlap_count": float(best_overlap),
+            "informative_coverage": best_informative_coverage,
+            "weighted_coverage": best_weighted_coverage,
+            "script_compatible": 1.0,
+        }
+
+    def _filter_low_confidence_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        query_variants: list[str],
+    ) -> list[dict[str, Any]]:
+        if not candidates:
+            return []
+
+        top = candidates[0]
+        top_metadata = top.get("metadata", {}) or {}
+        top_score = float(top.get("score") or 0.0)
+        top_semantic = float(top_metadata.get("semantic_score") or 0.0)
+        top_coverage = float(top_metadata.get("lexical_coverage") or 0.0)
+        top_informative_coverage = float(top_metadata.get("informative_coverage") or 0.0)
+        top_weighted_coverage = float(top_metadata.get("weighted_coverage") or 0.0)
+        script_compatible = bool(top_metadata.get("script_compatible"))
+
+        if top_semantic >= 0.86:
+            score_floor = max(self._MIN_HYBRID_SCORE, top_score - self._TOP_SCORE_WINDOW)
+            return [
+                candidate
+                for candidate in candidates
+                if float(candidate.get("score") or 0.0) >= score_floor
+            ]
+
+        if top_score < self._MIN_HYBRID_SCORE:
+            return []
+        if script_compatible and top_informative_coverage < 0.25 and top_semantic < 0.82:
+            return []
+        if script_compatible and max(top_coverage, top_weighted_coverage) < 0.18 and top_semantic < 0.81:
+            return []
+
+        score_floor = max(self._MIN_HYBRID_SCORE, top_score - self._TOP_SCORE_WINDOW)
+        return [
+            candidate
+            for candidate in candidates
+            if float(candidate.get("score") or 0.0) >= score_floor
+        ]
+
+    @classmethod
+    def _informative_tokens(cls, tokens: set[str]) -> set[str]:
+        return {token for token in tokens if len(token) >= 4}
+
+    @classmethod
+    def _shares_script(cls, left: str, right: str) -> bool:
+        return bool(cls._script_groups(left).intersection(cls._script_groups(right)))
+
+    @classmethod
+    def _script_groups(cls, text: str) -> set[str]:
+        groups: set[str] = set()
+        if cls._LATIN_RE.search(text):
+            groups.add("latin")
+        if cls._ARABIC_RE.search(text):
+            groups.add("arabic")
+        return groups
+
+    @classmethod
+    def _build_candidate_token_frequency(cls, candidates: list[dict[str, Any]]) -> dict[str, int]:
+        frequency: dict[str, int] = {}
+        for candidate in candidates:
+            tokens = cls._tokenize_for_match(str(candidate.get("text", "")))
+            for token in tokens:
+                frequency[token] = frequency.get(token, 0) + 1
+        return frequency
+
+    @classmethod
+    def _weighted_overlap_coverage(
+        cls,
+        query_tokens: set[str],
+        text_tokens: set[str],
+        token_frequency: dict[str, int],
+    ) -> float:
+        if not query_tokens:
+            return 0.0
+        weighted_total = 0.0
+        weighted_hit = 0.0
+        for token in query_tokens:
+            weight = 1.0 / max(1, token_frequency.get(token, 1))
+            weighted_total += weight
+            if token in text_tokens:
+                weighted_hit += weight
+        return weighted_hit / max(weighted_total, 1e-9)
+
+    @classmethod
+    def _count_bigram_matches(cls, query: str, text_folded: str) -> int:
+        sequence = [
+            match.group(0).casefold()
+            for match in cls._TOKEN_RE.finditer(query)
+            if len(match.group(0)) >= 3
+        ]
+        matches = 0
+        for left, right in zip(sequence, sequence[1:]):
+            if len(left) < 4 and len(right) < 4:
+                continue
+            if f"{left} {right}" in text_folded:
+                matches += 1
+        return matches
 
     @staticmethod
     def _build_prompt_question(query: str, conversation_context: str | None) -> str:

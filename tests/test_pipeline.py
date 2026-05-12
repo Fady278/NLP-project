@@ -841,7 +841,7 @@ def test_query_service_ignores_weak_variants_and_skips_adjacent_expansion():
                 }
             ]
 
-        def _post_process(self, results, top_k, dedup=True):
+        def _post_process(self, results, top_k, dedup=True, respect_min_score=True):
             return results[:top_k]
 
     class FakeQueryEnhancer:
@@ -895,3 +895,124 @@ def test_query_enhancer_rewrites_english_queries_for_arabic_corpus():
 
     assert "What are the graduation requirements?" in variants
     assert "ما متطلبات التخرج" in variants
+
+
+def test_query_service_reranks_exact_evidence_above_table_noise():
+    from api.services.query_service import QueryApplicationService
+
+    class FakeLLM:
+        provider_name = "test"
+        model = "test-model"
+
+        def generate(self, prompt: str) -> str:
+            return "answer"
+
+        def metadata(self) -> dict:
+            return {"provider": "test"}
+
+    class FakeRetrievalService:
+        def search(self, project_id, query, top_k=10, metadata_filter=None, dedup=True):
+            return [
+                {
+                    "text": "Grade table A B C D percentages and exam grading distribution.",
+                    "metadata": {
+                        "chunk_id": "noise",
+                        "chunk_content_hash": "h-noise",
+                        "source_doc_id": "doc-1",
+                        "source_path": "/tmp/rules.pdf",
+                        "page_num": 0,
+                    },
+                    "score": 0.84,
+                },
+                {
+                    "text": "Students graduate after completing 140 credit hours with a minimum GPA of 2.00.",
+                    "metadata": {
+                        "chunk_id": "evidence",
+                        "chunk_content_hash": "h-evidence",
+                        "source_doc_id": "doc-1",
+                        "source_path": "/tmp/rules.pdf",
+                        "page_num": 1,
+                    },
+                    "score": 0.8,
+                },
+            ]
+
+        def _post_process(self, results, top_k, dedup=True, respect_min_score=True):
+            return results[:top_k]
+
+    class FakeQueryEnhancer:
+        def variants_for_query(self, query, **kwargs):
+            return [query]
+
+    service = QueryApplicationService(
+        retrieval_service=FakeRetrievalService(),
+        llm_service=FakeLLM(),
+        system_data_service=type("FakeSystem", (), {"record_query_activity": lambda *args, **kwargs: None})(),
+        processed_dir=Path(tempfile.mkdtemp()),
+    )
+    service.query_enhancer = FakeQueryEnhancer()
+
+    response = service.execute(project_id="demo", query="What is the minimum GPA required for graduation?", top_k=2)
+
+    assert response.retrieved_context[0].metadata["chunk_id"] == "evidence"
+
+
+def test_query_service_drops_out_of_scope_semantic_noise():
+    from api.services.query_service import QueryApplicationService
+
+    class FakeLLM:
+        provider_name = "test"
+        model = "test-model"
+
+        def generate(self, prompt: str) -> str:
+            return "answer"
+
+        def metadata(self) -> dict:
+            return {"provider": "test"}
+
+    class FakeRetrievalService:
+        def search(self, project_id, query, top_k=10, metadata_filter=None, dedup=True):
+            return [
+                {
+                    "text": "Academic advising and graduation rules for students in the college.",
+                    "metadata": {
+                        "chunk_id": "c1",
+                        "chunk_content_hash": "h1",
+                        "source_doc_id": "doc-1",
+                        "source_path": "/tmp/rules.pdf",
+                        "page_num": 0,
+                    },
+                    "score": 0.79,
+                },
+                {
+                    "text": "Exam attendance and course withdrawal rules.",
+                    "metadata": {
+                        "chunk_id": "c2",
+                        "chunk_content_hash": "h2",
+                        "source_doc_id": "doc-1",
+                        "source_path": "/tmp/rules.pdf",
+                        "page_num": 1,
+                    },
+                    "score": 0.78,
+                },
+            ]
+
+        def _post_process(self, results, top_k, dedup=True, respect_min_score=True):
+            return results[:top_k]
+
+    class FakeQueryEnhancer:
+        def variants_for_query(self, query, **kwargs):
+            return [query]
+
+    service = QueryApplicationService(
+        retrieval_service=FakeRetrievalService(),
+        llm_service=FakeLLM(),
+        system_data_service=type("FakeSystem", (), {"record_query_activity": lambda *args, **kwargs: None})(),
+        processed_dir=Path(tempfile.mkdtemp()),
+    )
+    service.query_enhancer = FakeQueryEnhancer()
+
+    response = service.execute(project_id="demo", query="What are the dormitory housing fees for students?", top_k=2)
+
+    assert response.retrieved_context == []
+    assert response.answer == "I don't know"
