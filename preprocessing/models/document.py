@@ -1,11 +1,3 @@
-"""
-Document model — the canonical unit flowing through the RAG pipeline.
-
-Every loader produces a list of RawDocument objects; the cleaning step
-transforms them into CleanDocument objects; chunking (Phase 2) will
-then split CleanDocuments into Chunk objects stored in the vector DB.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -23,21 +15,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RawDocument:
-    """
-    Output of a Loader: raw, un-cleaned text plus rich metadata.
-
-    Attributes
-    ----------
-    doc_id       : Deterministic SHA-256 hash of (file_hash + page_num).
-    content_hash : SHA-256 hash of raw_text for duplicate/content comparison.
-    source_path  : Absolute path to the original file (stored in metadata for tracking).
-    file_type    : Extension without the dot, lower-cased  (e.g. "pdf").
-    page_num     : Page / section index (0-based). -1 when not applicable.
-    raw_text     : Verbatim text as extracted from the source.
-    metadata     : Arbitrary key-value pairs (author, title, language …).
-    extracted_at : ISO-8601 timestamp of extraction.
-    """
-
     source_path: str
     file_type: str
     page_num: int
@@ -70,23 +47,6 @@ class RawDocument:
 
 @dataclass
 class CleanDocument:
-    """
-    Output of the Cleaner: a RawDocument whose text has been normalised.
-
-    Attributes
-    ----------
-    doc_id          : Inherited from the source RawDocument.
-    source_path     : Inherited.
-    file_type       : Inherited.
-    page_num        : Inherited.
-    clean_text      : Normalised, de-noised text ready for chunking.
-    char_count      : Character count of clean_text (post-cleaning).
-    word_count      : Whitespace-delimited word count.
-    detected_lang   : ISO 639-1 language code detected heuristically.
-    is_arabic       : True when Arabic script is dominant (> 30 % chars).
-    metadata        : Merged metadata from source + cleaning step.
-    """
-
     doc_id: str
     source_path: str
     file_type: str
@@ -129,12 +89,10 @@ class CleanDocument:
         return asdict(self)
 
     def is_empty(self, min_words: int = 5) -> bool:
-        """Return True when the document carries too little content to be useful."""
         return self.word_count < min_words
 
 
 def save_documents(docs: list[CleanDocument], output_path: str | Path) -> None:
-    """Persist a list of CleanDocuments to a JSON-lines file."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -151,7 +109,6 @@ def save_documents(docs: list[CleanDocument], output_path: str | Path) -> None:
 
 
 def load_documents(input_path: str | Path) -> list[CleanDocument]:
-    """Load CleanDocuments previously saved with save_documents()."""
     input_path = Path(input_path)
     docs = []
     with input_path.open("r", encoding="utf-8") as fh:
