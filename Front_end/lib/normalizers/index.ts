@@ -43,7 +43,14 @@ export function normalizeChunk(raw: unknown, index = 0): RetrievedChunk {
     'Unknown source'
 
   const pageNumberRaw =
-    data.pageNumber ?? data.page_num ?? data.page ?? metadata.page_num ?? metadata.page
+    data.pageNumber ??
+    data.page_label ??
+    data.page_num ??
+    data.page ??
+    metadata.display_page_num ??
+    metadata.page_label ??
+    metadata.page_num ??
+    metadata.page
   const pageNumber =
     pageNumberRaw === null || pageNumberRaw === undefined
       ? undefined

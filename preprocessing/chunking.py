@@ -14,6 +14,8 @@ from preprocessing.models.document import CleanDocument
 
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 _MIN_CHUNK_TOKENS = 80
+_MIN_INFORMATIVE_CHUNK_TOKENS = 12
+_MIN_INFORMATIVE_ALPHA_CHARS = 20
 _LONG_UNIT_SPLIT_PATTERNS = (
     re.compile(r"(?<=[:;])\s+"),
     re.compile(r"\s+\|\s+"),
@@ -204,6 +206,8 @@ def _is_sentence_boundary(text: str, idx: int) -> bool:
 
 def _make_chunk(clean_doc: CleanDocument, strategy: str, text: str, index: int) -> Chunk:
     digest = _make_chunk_id(clean_doc.doc_id, strategy, index)
+    page_label = clean_doc.metadata.get("page_label")
+    display_page_num = clean_doc.page_num + 1 if clean_doc.page_num >= 0 else None
     return Chunk(
         chunk_id=digest,
         source_doc_id=clean_doc.doc_id,
@@ -221,6 +225,8 @@ def _make_chunk(clean_doc: CleanDocument, strategy: str, text: str, index: int) 
             "content_hash": clean_doc.metadata.get("content_hash"),
             "chunk_content_hash": chunk_content_hash(text),
             "file_hash": clean_doc.metadata.get("file_hash"),
+            "page_label": str(page_label or display_page_num or ""),
+            "display_page_num": display_page_num,
         },
     )
 
@@ -252,7 +258,7 @@ def chunk_by_paragraph(clean_doc: CleanDocument, target_tokens: int = 260, overl
 
 
 def chunk_by_sentence_window(
-    clean_doc: CleanDocument, target_tokens: int = 200, overlap_sentences: int = 1
+    clean_doc: CleanDocument, target_tokens: int = 140, overlap_sentences: int = 0
 ) -> list[Chunk]:
     sentences = _prepare_sentence_units(clean_doc.clean_text, target_tokens)
     if not sentences:
@@ -292,12 +298,27 @@ def chunk_documents(clean_docs: list[CleanDocument], strategy: str = "sentence_w
     all_chunks: list[Chunk] = []
     for clean_doc in clean_docs:
         if strategy == "paragraph":
-            all_chunks.extend(chunk_by_paragraph(clean_doc))
+            doc_chunks = chunk_by_paragraph(clean_doc)
         elif strategy == "sentence_window":
-            all_chunks.extend(chunk_by_sentence_window(clean_doc))
+            doc_chunks = chunk_by_sentence_window(clean_doc)
         else:
             raise ValueError("Unknown chunking strategy. Use 'paragraph' or 'sentence_window'.")
+        all_chunks.extend(chunk for chunk in doc_chunks if _is_informative_chunk(chunk))
     return all_chunks
+
+
+def _is_informative_chunk(chunk: Chunk) -> bool:
+    text = chunk.text.strip()
+    if not text:
+        return False
+    if chunk.token_count < _MIN_INFORMATIVE_CHUNK_TOKENS:
+        return False
+
+    alpha_chars = sum(1 for ch in text if ch.isalpha())
+    if alpha_chars < _MIN_INFORMATIVE_ALPHA_CHARS:
+        return False
+
+    return True
 
 
 def _merge_tiny_chunks(chunks: list[Chunk], min_tokens: int = 80) -> list[Chunk]:

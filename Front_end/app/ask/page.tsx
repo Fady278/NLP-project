@@ -21,6 +21,11 @@ import { Badge } from '@/components/ui/badge'
 import { consumePendingChatQuestion } from '@/lib/config/api'
 import { useIngestionJobs, useRagQuery, useRelativeTime } from '@/lib/hooks/use-rag'
 
+function isUnknownAnswer(answer: string): boolean {
+  const normalized = answer.trim().toLowerCase()
+  return normalized === "i don't know" || normalized === "i don't know."
+}
+
 export default function AskPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -242,6 +247,9 @@ export default function AskPage() {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.35 }}
                     >
+                      {(() => {
+                        const canInspectSources = !isUnknownAnswer(answer.answer) && answer.chunks.length > 0
+                        return (
                       <div className="space-y-4">
                         <div className="ml-auto max-w-[80%]">
                           <div className="rounded-2xl rounded-br-md bg-primary px-4 py-3 text-primary-foreground">
@@ -259,7 +267,10 @@ export default function AskPage() {
                                 ? 'border-primary/40 bg-primary/5 ring-1 ring-primary/15'
                                 : 'border-border/40 bg-card/30 hover:border-primary/25'
                             }`}
-                            onClick={() => setSelectedAnswer(selectedAnswer?.id === answer.id ? null : answer)}
+                            onClick={() => {
+                              if (!canInspectSources) return
+                              setSelectedAnswer(selectedAnswer?.id === answer.id ? null : answer)
+                            }}
                           >
                             {answer.status === 'pending' ? (
                               <div className="flex items-center gap-1.5 py-1">
@@ -276,7 +287,7 @@ export default function AskPage() {
                               <>
                                 <p className="whitespace-pre-wrap text-sm leading-relaxed">{answer.answer}</p>
 
-                                {answer.chunks.length > 0 && (
+                                {canInspectSources && (
                                   <div className="mt-4 flex flex-wrap gap-2">
                                     {answer.chunks.slice(0, 3).map((chunk) => (
                                       <Badge
@@ -296,14 +307,18 @@ export default function AskPage() {
                                   </div>
                                 )}
 
-                                <p className="mt-3 text-xs text-muted-foreground">
-                                  Click to {selectedAnswer?.id === answer.id ? 'hide' : 'view'} sources
-                                </p>
+                                {canInspectSources && (
+                                  <p className="mt-3 text-xs text-muted-foreground">
+                                    Click to {selectedAnswer?.id === answer.id ? 'hide' : 'view'} sources
+                                  </p>
+                                )}
                               </>
                             )}
                           </div>
                         </div>
                       </div>
+                        )
+                      })()}
                     </motion.div>
                   ))}
 

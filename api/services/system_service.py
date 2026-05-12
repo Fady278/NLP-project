@@ -147,7 +147,11 @@ class SystemDataService:
                     "text": chunk.get("text", ""),
                     "score": score,
                     "source": source_path,
-                    "page_num": chunk.get("page_num"),
+                    "page_num": (
+                        metadata.get("display_page_num")
+                        or metadata.get("page_label")
+                        or (chunk.get("page_num") + 1 if isinstance(chunk.get("page_num"), int) and chunk.get("page_num") >= 0 else chunk.get("page_num"))
+                    ),
                     "metadata": metadata,
                 }
             )

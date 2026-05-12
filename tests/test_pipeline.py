@@ -269,7 +269,7 @@ def test_pipeline_skips_duplicate_files_before_load():
     ]
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        pipeline = PreprocessingPipeline(output_dir=tmpdir)
+        pipeline = PreprocessingPipeline(output_dir=tmpdir, min_words=3)
         with patch("preprocessing.pipeline.get_loader", side_effect=loaders):
             docs = pipeline.run([Path("first.pdf"), Path("second.pdf")])
 
@@ -768,3 +768,130 @@ def test_retrieval_service_large_top_k_is_still_single_query():
     assert len(results) == 100
     assert client.search_calls == 1
     assert embedding.query_calls == 1
+
+
+def test_retrieval_service_drops_low_score_noise():
+    class FakeEmbeddingModel:
+        def embed(self, text, doc_type="query"):
+            return [0.1, 0.2]
+
+    class FakeVectorDBClient:
+        def create_collection_name(self, project_id):
+            return f"collection_{project_id}"
+
+        def search(self, collection_name, query_vector, top_k=5, metadata_filter=None):
+            return [
+                {"text": "relevant", "metadata": {"chunk_id": "c1", "chunk_content_hash": "h1"}, "score": 0.91},
+                {"text": "borderline", "metadata": {"chunk_id": "c2", "chunk_content_hash": "h2"}, "score": 0.74},
+                {"text": "noise", "metadata": {"chunk_id": "c3", "chunk_content_hash": "h3"}, "score": 0.41},
+            ]
+
+    service = _get_retrieval_service()(FakeVectorDBClient(), FakeEmbeddingModel())
+    results = service.search("demo", "query", top_k=5, dedup=True)
+
+    assert [r["metadata"]["chunk_id"] for r in results] == ["c1", "c2"]
+
+
+def test_query_service_ignores_weak_variants_and_skips_adjacent_expansion():
+    from api.services.query_service import QueryApplicationService
+
+    class FakeLLM:
+        provider_name = "test"
+        model = "test-model"
+
+        def generate(self, prompt: str) -> str:
+            return "answer"
+
+        def metadata(self) -> dict:
+            return {"provider": "test"}
+
+    class FakeRetrievalService:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, project_id, query, top_k=10, metadata_filter=None, dedup=True):
+            self.calls.append(query)
+            if query == "relevant question":
+                return [
+                    {
+                        "text": "primary chunk",
+                        "metadata": {
+                            "chunk_id": "c1",
+                            "chunk_content_hash": "h1",
+                            "source_doc_id": "doc-1",
+                            "source_path": "/tmp/doc.pdf",
+                            "page_num": 0,
+                            "chunk_index": 0,
+                        },
+                        "score": 0.89,
+                    }
+                ]
+            return [
+                {
+                    "text": "weak rewrite chunk",
+                    "metadata": {
+                        "chunk_id": "c2",
+                        "chunk_content_hash": "h2",
+                        "source_doc_id": "doc-1",
+                        "source_path": "/tmp/doc.pdf",
+                        "page_num": 0,
+                        "chunk_index": 1,
+                    },
+                    "score": 0.42,
+                }
+            ]
+
+        def _post_process(self, results, top_k, dedup=True):
+            return results[:top_k]
+
+    class FakeQueryEnhancer:
+        def variants_for_query(self, query, **kwargs):
+            return [query, "weak rewrite"]
+
+    service = QueryApplicationService(
+        retrieval_service=FakeRetrievalService(),
+        llm_service=FakeLLM(),
+        system_data_service=type("FakeSystem", (), {"record_query_activity": lambda *args, **kwargs: None})(),
+        processed_dir=Path(tempfile.mkdtemp()),
+    )
+    service.query_enhancer = FakeQueryEnhancer()
+
+    response = service.execute(project_id="demo", query="relevant question", top_k=5)
+
+    assert len(response.retrieved_context) == 1
+    assert response.retrieved_context[0].metadata["chunk_id"] == "c1"
+    assert response.retrieved_context[0].metadata["page_label"] == "1"
+
+
+def test_query_enhancer_rewrites_english_queries_for_arabic_corpus():
+    from api.services.query_enhancer import QueryEnhancer
+    from preprocessing.cleaners.text_cleaner import TextCleaner
+
+    class FakeLLM:
+        provider_name = "test"
+
+        def generate(self, prompt: str) -> str:
+            if "Modern Standard Arabic" in prompt:
+                return "ما متطلبات التخرج"
+            return "graduation requirements"
+
+    cleaner = TextCleaner()
+    raw = RawDocument(
+        source_path="/tmp/rules.pdf",
+        file_type="pdf",
+        page_num=0,
+        raw_text="متطلبات التخرج تشمل الساعات المعتمدة والمقررات الإجبارية والاختيارية.",
+        file_hash="arabic-file",
+    )
+    clean = cleaner.clean(raw)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_documents([clean], Path(tmpdir) / "clean_documents.jsonl")
+        enhancer = QueryEnhancer(FakeLLM(), processed_dir=tmpdir)
+        variants = enhancer.variants_for_query(
+            "What are the graduation requirements?",
+            retrieval_results=[],
+        )
+
+    assert "What are the graduation requirements?" in variants
+    assert "ما متطلبات التخرج" in variants

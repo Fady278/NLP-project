@@ -35,7 +35,7 @@ class PreprocessingPipeline:
         self,
         output_dir: str | Path = "data/processed",
         project_id: str | None = None,
-        min_words: int = 5,
+        min_words: int = 12,
         chunk_strategy: str = "sentence_window",
         index_to_vectordb: bool = False,
         reset_vectordb: bool = False,
@@ -238,7 +238,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=",".join(supported_extensions()),
         help="Comma-separated file extensions to process.",
     )
-    p.add_argument("--min-words", type=int, default=5)
+    p.add_argument("--min-words", type=int, default=12)
     p.add_argument(
         "--project-id",
         help="Required when indexing to the vector DB so each corpus stays isolated.",

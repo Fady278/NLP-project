@@ -21,6 +21,10 @@ if TYPE_CHECKING:
 
 class QueryApplicationService:
     _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u0600-\u06FF]+")
+    _SEMANTIC_VARIANT_SCORE_FLOOR = 0.76
+    _SEMANTIC_FALLBACK_SCORE_FLOOR = 0.68
+    _LEXICAL_SCORE_FLOOR = 0.72
+    _LEXICAL_MIN_OVERLAP = 2
 
     def __init__(
         self,
@@ -46,6 +50,7 @@ class QueryApplicationService:
         self.system_data_service = system_data_service or SystemDataService()
         self.processed_dir = Path(processed_dir)
         self.query_enhancer = QueryEnhancer(self.llm_service, processed_dir=self.processed_dir)
+        self.expand_adjacent_chunks = False
 
     def execute(
         self,
@@ -73,7 +78,8 @@ class QueryApplicationService:
                 query_variants=query_variants,
                 top_k=top_k,
             )
-            chunks = self._expand_with_adjacent_chunks(chunks)
+            if self.expand_adjacent_chunks:
+                chunks = self._expand_with_adjacent_chunks(chunks)
         except Exception as exc:  # noqa: BLE001
             raise PipelineExecutionError(
                 "Retrieval pipeline failed",
@@ -170,18 +176,32 @@ class QueryApplicationService:
         query_variants: list[str],
         top_k: int,
     ) -> list[dict[str, Any]]:
+        if not query_variants:
+            return []
+
         merged: list[dict[str, Any]] = []
         best_by_chunk_id: dict[str, dict[str, Any]] = {}
         fallback_rows: list[dict[str, Any]] = []
+        accepted_semantic = 0
+        best_semantic_score = 0.0
 
-        for variant in query_variants:
+        for index, variant in enumerate(query_variants):
             results = self.retrieval_service.search(
                 project_id=project_id,
                 query=variant,
                 top_k=top_k,
                 dedup=False,
             )
-            results.extend(self._search_local_chunks(variant, top_k=top_k))
+            top_score = self._top_result_score(results)
+            if top_score is not None:
+                best_semantic_score = max(best_semantic_score, top_score)
+
+            if index > 0 and (top_score is None or top_score < self._SEMANTIC_VARIANT_SCORE_FLOOR):
+                continue
+
+            if results:
+                accepted_semantic += 1
+
             for row in results:
                 metadata = row.get("metadata", {}) or {}
                 chunk_id = metadata.get("chunk_id")
@@ -196,6 +216,19 @@ class QueryApplicationService:
                         best_by_chunk_id[chunk_id] = row
                 else:
                     fallback_rows.append(row)
+
+        if accepted_semantic == 0 or best_semantic_score < self._SEMANTIC_FALLBACK_SCORE_FLOOR:
+            for variant in query_variants[:1]:
+                lexical_results = self._search_local_chunks(variant, top_k=top_k)
+                for row in lexical_results:
+                    metadata = row.get("metadata", {}) or {}
+                    chunk_id = metadata.get("chunk_id")
+                    if isinstance(chunk_id, str) and chunk_id:
+                        existing = best_by_chunk_id.get(chunk_id)
+                        if existing is None or row.get("score", 0) > existing.get("score", 0):
+                            best_by_chunk_id[chunk_id] = row
+                    else:
+                        fallback_rows.append(row)
 
         merged.extend(best_by_chunk_id.values())
         merged.extend(fallback_rows)
@@ -218,12 +251,18 @@ class QueryApplicationService:
                 continue
 
             overlap = len(tokens.intersection(text_tokens))
-            if overlap == 0:
+            if overlap < self._LEXICAL_MIN_OVERLAP:
                 continue
 
             coverage = overlap / max(1, len(tokens))
-            phrase_bonus = 0.08 if query_text in text.casefold() else 0.0
-            score = min(0.99, 0.84 + (coverage * 0.12) + phrase_bonus)
+            phrase_match = query_text in text.casefold()
+            if not phrase_match and coverage < 0.55:
+                continue
+
+            phrase_bonus = 0.1 if phrase_match else 0.0
+            score = min(0.9, 0.42 + (coverage * 0.36) + phrase_bonus)
+            if score < self._LEXICAL_SCORE_FLOOR:
+                continue
             scored.append((score, row))
 
         scored.sort(key=lambda item: item[0], reverse=True)
@@ -257,14 +296,26 @@ class QueryApplicationService:
     def _serialize_chunks(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         serialized: list[dict[str, Any]] = []
         for chunk in chunks:
+            metadata = dict(chunk.get("metadata", {}) or {})
+            if "page_num" in metadata and "page_label" not in metadata:
+                page_num = metadata.get("page_num")
+                if isinstance(page_num, int) and page_num >= 0:
+                    metadata["page_label"] = str(page_num + 1)
             serialized.append(
                 {
                     "text": chunk.get("text", ""),
-                    "metadata": chunk.get("metadata", {}) or {},
+                    "metadata": metadata,
                     "score": chunk.get("score"),
                 }
             )
         return serialized
+
+    @staticmethod
+    def _top_result_score(results: list[dict[str, Any]]) -> float | None:
+        if not results:
+            return None
+        score = results[0].get("score")
+        return float(score) if isinstance(score, (int, float)) else None
 
     def _expand_with_adjacent_chunks(self, chunks: list[dict[str, Any]], *, neighbor_window: int = 1) -> list[dict[str, Any]]:
         if not chunks:

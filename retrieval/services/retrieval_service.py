@@ -10,13 +10,15 @@ class RetrievalService:
         self,
         vectordb_client,
         embedding_client: EmbeddingModel | None = None,
-        max_chunks_per_doc: int | None = None,
-        oversample_factor: float = 2.0,
+        max_chunks_per_doc: int | None = 3,
+        oversample_factor: float = 3.0,
+        min_score: float = 0.74,
     ):
         self.embedding_client = embedding_client if embedding_client else EmbeddingModel()
         self.vectordb_client = vectordb_client
         self.max_chunks_per_doc = max_chunks_per_doc
         self.oversample_factor = max(1.0, oversample_factor)
+        self.min_score = min_score
 
     def search(
         self,
@@ -50,6 +52,10 @@ class RetrievalService:
 
         for result in results:
             metadata = result.get("metadata", {}) or {}
+            score = result.get("score")
+            if isinstance(score, (int, float)) and score < self.min_score:
+                continue
+
             chunk_id = metadata.get("chunk_id")
             content_hash = (
                 metadata.get("chunk_content_hash")

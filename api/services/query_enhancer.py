@@ -29,7 +29,7 @@ class QueryEnhancer:
     def __init__(self, llm_service, processed_dir: str | Path = "data/processed") -> None:
         self.llm_service = llm_service
         self.processed_dir = Path(processed_dir)
-        self._rewrite_cache: dict[tuple[str, str], str] = {}
+        self._rewrite_cache: dict[tuple[str, str, str], str] = {}
         self._dominant_lang_cache: str | None = None
 
     def variants_for_query(
@@ -56,13 +56,11 @@ class QueryEnhancer:
             if contextual_normalized and contextual_normalized not in variants:
                 variants.append(contextual_normalized)
 
-        if not self._should_try_crosslingual_rewrite(cleaned, retrieval_results or []):
-            return variants
-
         rewrite_seed = contextual or cleaned
-        rewritten = self._rewrite_to_english(rewrite_seed)
-        if rewritten and rewritten not in variants:
-            variants.append(rewritten)
+        for target_language in self._crosslingual_rewrite_targets(cleaned, retrieval_results or []):
+            rewritten = self._rewrite_query(rewrite_seed, target_language=target_language)
+            if rewritten and rewritten not in variants:
+                variants.append(rewritten)
 
         return variants
 
@@ -76,43 +74,48 @@ class QueryEnhancer:
         text = _WHITESPACE_RE.sub(" ", text)
         return text.strip()
 
-    def _should_try_crosslingual_rewrite(self, query: str, retrieval_results: list[dict]) -> bool:
-        if not _ARABIC_CHAR_RE.search(query):
-            return False
-
+    def _crosslingual_rewrite_targets(self, query: str, retrieval_results: list[dict]) -> list[str]:
+        query_language = self._detect_query_language(query)
         dominant_lang = self._get_dominant_corpus_language()
-        if dominant_lang == "ar":
-            return False
+        top_score = self._top_score(retrieval_results)
+        weak_results = top_score is None or top_score < 0.72
 
-        # If the current corpus on disk is mostly non-Arabic, always try a fast
-        # English rewrite for Arabic user queries. This avoids being trapped by
-        # stale high-score hits from older mixed-language vector collections.
-        if dominant_lang not in {"ar", "unknown"}:
-            return True
+        if query_language == "ar":
+            if dominant_lang != "ar" or weak_results:
+                return ["en"]
+            return []
 
-        if not retrieval_results:
-            return True
+        if dominant_lang == "ar" or weak_results:
+            return ["ar"]
+        return []
 
-        top_score = retrieval_results[0].get("score")
-        if not isinstance(top_score, (int, float)):
-            return True
-
-        return top_score < 0.72
-
-    def _rewrite_to_english(self, query: str) -> str | None:
-        cache_key = (self.llm_service.provider_name, query.strip())
+    def _rewrite_query(self, query: str, *, target_language: str) -> str | None:
+        cache_key = (self.llm_service.provider_name, target_language, query.strip())
         if cache_key in self._rewrite_cache:
             return self._rewrite_cache[cache_key]
 
-        prompt = (
-            "You rewrite user questions into short English retrieval queries for an English document corpus.\n"
-            "Rules:\n"
-            "- Return only one concise English query.\n"
-            "- Preserve names and likely transliterate Arabic names into common Latin spelling.\n"
-            "- Expand colloquial Arabic meaning into standard English search wording.\n"
-            "- Do not explain anything.\n\n"
-            f"User question:\n{query}"
-        )
+        if target_language == "en":
+            prompt = (
+                "You rewrite user questions into short English retrieval queries for an English document corpus.\n"
+                "Rules:\n"
+                "- Return only one concise English query.\n"
+                "- Preserve names and likely transliterate Arabic names into common Latin spelling.\n"
+                "- Expand colloquial Arabic meaning into standard English search wording.\n"
+                "- Do not explain anything.\n\n"
+                f"User question:\n{query}"
+            )
+        elif target_language == "ar":
+            prompt = (
+                "You rewrite user questions into short Modern Standard Arabic retrieval queries for an Arabic document corpus.\n"
+                "Rules:\n"
+                "- Return only one concise Arabic query.\n"
+                "- Preserve names and convert English technical intent into natural Arabic search wording when appropriate.\n"
+                "- Keep key product, course, or department names if they are usually used as-is.\n"
+                "- Do not explain anything.\n\n"
+                f"User question:\n{query}"
+            )
+        else:
+            return None
 
         try:
             rewritten = self.llm_service.generate(prompt).strip()
@@ -212,3 +215,14 @@ class QueryEnhancer:
 
         self._dominant_lang_cache = max(counts, key=counts.get) if counts else "unknown"
         return self._dominant_lang_cache
+
+    @staticmethod
+    def _detect_query_language(query: str) -> str:
+        return "ar" if _ARABIC_CHAR_RE.search(query) else "en"
+
+    @staticmethod
+    def _top_score(retrieval_results: list[dict]) -> float | None:
+        if not retrieval_results:
+            return None
+        score = retrieval_results[0].get("score")
+        return float(score) if isinstance(score, (int, float)) else None

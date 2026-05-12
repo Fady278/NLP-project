@@ -20,7 +20,7 @@ export const API_CONFIG = {
 } as const
 
 export const MOCK_MODE_STORAGE_KEY = 'rag-console-mock-mode'
-export const CHAT_SESSIONS_STORAGE_KEY = 'rag-console-chat-sessions'
+export const CHAT_SESSIONS_STORAGE_KEY = 'rag-console-chat-sessions-v2'
 export const PENDING_CHAT_QUESTION_STORAGE_KEY = 'rag-console-pending-chat-question'
 
 export function getMockMode(): boolean {
