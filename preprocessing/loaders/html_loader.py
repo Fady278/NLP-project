@@ -1,22 +1,3 @@
-"""
-HTML Loader
------------
-Extracts clean text from HTML files or raw HTML strings using
-BeautifulSoup + lxml.
-
-Design decisions
-~~~~~~~~~~~~~~~~
-* Strips script, style, nav, footer, and ad-related tags before text
-  extraction — these produce noise with zero semantic value.
-* Splits on <article>, <section>, or <h1>/<h2> boundaries to produce
-  logical page-level chunks (consistent with PDF/DOCX page semantics).
-* Detects encoding from the HTTP charset meta tag, falling back to
-  chardet byte-level detection, so the loader handles legacy documents
-  and Arabic / multilingual HTML correctly.
-* Can load from file path or accept a raw HTML string directly via the
-  class method `from_string()`.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -28,14 +9,14 @@ from lxml import html as lxml_html
 
 try:
     from bs4 import BeautifulSoup, Comment, Tag
-except ImportError:  # pragma: no cover
+except ImportError:  
     BeautifulSoup = None
     Comment = None
     Tag = object
 
 try:
     import chardet
-except ImportError:  # pragma: no cover
+except ImportError: 
     chardet = None
 
 from preprocessing.loaders.base_loader import BaseLoader
@@ -43,14 +24,12 @@ from preprocessing.models.document import RawDocument
 
 logger = logging.getLogger(__name__)
 
-# Tags whose entire sub-tree is noise — remove before extraction.
 _NOISE_TAGS = {
     "script", "style", "noscript", "nav", "footer", "header",
     "aside", "form", "button", "iframe", "svg", "canvas",
-    "figure",  # captions sometimes ok, but usually noise in raw HTML
+    "figure",  
 }
 
-# Block-level section boundaries — we split the document here.
 _SECTION_TAGS = {"article", "section", "main"}
 _HEADING_TAGS = {"h1", "h2"}
 _CONTENT_TAGS = {"p", "li", "td", "th"}
@@ -61,11 +40,9 @@ class HTMLLoader(BaseLoader):
 
     def __init__(self, path: str | Path) -> None:
         super().__init__(path)
-        self._raw_bytes: bytes | None = None  # set by from_string fallback
+        self._raw_bytes: bytes | None = None  
 
-    # ------------------------------------------------------------------
-    # Alternative constructor — load from string rather than file
-    # ------------------------------------------------------------------
+  
     @classmethod
     def from_string(cls, html: str, virtual_path: str = "inline.html") -> "HTMLLoader":
         obj = cls.__new__(cls)
@@ -73,10 +50,7 @@ class HTMLLoader(BaseLoader):
         obj._raw_bytes = html.encode("utf-8")
         obj._file_hash = hashlib.sha256(obj._raw_bytes).hexdigest()
         return obj
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+      
 
     def load(self) -> list[RawDocument]:
         html_bytes = self._raw_bytes or self.path.read_bytes()
@@ -105,10 +79,7 @@ class HTMLLoader(BaseLoader):
         )
         return docs
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
+  
     @staticmethod
     def _detect_encoding(raw: bytes) -> str:
         """Charset priority: HTTP-equiv meta → chardet heuristic → utf-8."""
@@ -137,11 +108,7 @@ class HTMLLoader(BaseLoader):
     def _extract_sections(
         self, soup: BeautifulSoup
     ) -> list[tuple[str, str]]:
-        """
-        Return list of (section_title, plain_text) pairs.
-        Splits on <article>/<section>/<main> or <h1>/<h2> if none found.
-        """
-        # Try semantic section tags first
+
         section_roots = soup.find_all(_SECTION_TAGS)
         if section_roots:
             results = []
@@ -153,7 +120,6 @@ class HTMLLoader(BaseLoader):
             if results:
                 return results
 
-        # Fall back: split at heading boundaries
         return self._split_by_headings(soup)
 
     @staticmethod
@@ -182,7 +148,6 @@ class HTMLLoader(BaseLoader):
             sections.append((current_title, current_parts))
 
         if not sections:
-            # Last resort: whole document as one section
             body = soup.find("body") or soup
             return [("", body.get_text("\n", strip=True))]
 
